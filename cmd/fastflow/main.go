@@ -2,9 +2,12 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/dustinrasener/fastflow/internal/config"
 	"github.com/dustinrasener/fastflow/internal/runner"
@@ -36,18 +39,33 @@ var runCmd = &cobra.Command{
 	Short: "Run a workflow pipeline",
 	Long: `Run a complete workflow pipeline from goal to PR.
 
+Goal can be provided via (in priority order):
+  1. --goal flag:      fastflow run --goal "Add feature" --ticket ENG-1234
+  2. --goal-file flag: fastflow run --goal-file goal.txt --ticket ENG-1234
+  3. Piped stdin:      echo "Add feature" | fastflow run --ticket ENG-1234
+  4. Interactive:      fastflow run --ticket ENG-1234 (prompts for input)
+
+For interactive input, type your goal (multi-line supported) and press
+Enter twice (two blank lines) to submit.
+
 Examples:
-  # Full workflow (default): research → plan → implement → validate → commit
+  # Explicit goal flag
   fastflow run --goal "Add user authentication" --ticket ENG-1234
 
-  # Plan-first workflow: skips research
-  fastflow run --goal "Fix typo in README" --ticket ENG-1235 --workflow plan-first
+  # Read goal from file
+  fastflow run --goal-file requirements.md --ticket ENG-1235
 
-  # Debug workflow: uses debug skill, focused on investigation
-  fastflow run --goal "Fix login timeout bug" --ticket ENG-1236 --workflow debug
+  # Pipe goal from another command
+  cat feature-spec.txt | fastflow run --ticket ENG-1236
+
+  # Interactive mode (will prompt for goal)
+  fastflow run --ticket ENG-1237
+
+  # Plan-first workflow
+  fastflow run --goal "Fix typo" --ticket ENG-1238 --workflow plan-first
 
   # Skip checkpoints (for CI/automation)
-  fastflow run --goal "Refactor auth system" --ticket ENG-1237 --no-review`,
+  fastflow run --goal "Refactor auth" --ticket ENG-1239 --no-review`,
 	RunE: runRun,
 }
 
@@ -70,6 +88,7 @@ var versionCmd = &cobra.Command{
 // Flags
 var (
 	flagGoal       string
+	flagGoalFile   string
 	flagTicket     string
 	flagWorkflow   string
 	flagNoReview   bool
@@ -81,7 +100,8 @@ var (
 
 func init() {
 	// Run command flags
-	runCmd.Flags().StringVar(&flagGoal, "goal", "", "Goal description for the pipeline (required)")
+	runCmd.Flags().StringVar(&flagGoal, "goal", "", "Goal description for the pipeline")
+	runCmd.Flags().StringVar(&flagGoalFile, "goal-file", "", "Path to file containing goal description")
 	runCmd.Flags().StringVar(&flagTicket, "ticket", "", "Ticket identifier (required)")
 	runCmd.Flags().StringVar(&flagWorkflow, "workflow", "", "Workflow to run (default: from config)")
 	runCmd.Flags().BoolVar(&flagNoReview, "no-review", false, "Skip checkpoint pauses")
@@ -90,8 +110,8 @@ func init() {
 	runCmd.Flags().BoolVar(&flagDebug, "debug", false, "Enable verbose debug output")
 	runCmd.Flags().StringVar(&flagResume, "resume", "auto", "Resume behavior: auto (default), true, false, or force")
 
-	runCmd.MarkFlagRequired("goal")
-	runCmd.MarkFlagRequired("ticket")
+	// Only ticket is required - goal can come from multiple sources
+	_ = runCmd.MarkFlagRequired("ticket")
 
 	// Validate command flags
 	validateCmd.Flags().StringVar(&flagConfigPath, "config", "", "Path to config file (default: orchestrator.json)")
@@ -102,9 +122,147 @@ func init() {
 	rootCmd.AddCommand(versionCmd)
 }
 
+// resolveGoal determines the goal from various input sources in priority order:
+// 1. --goal flag (explicit)
+// 2. --goal-file flag (file-based)
+// 3. Piped stdin
+// 4. Interactive stdin prompt
+func resolveGoal() (string, error) {
+	// Priority 1: Explicit --goal flag
+	if flagGoal != "" {
+		return flagGoal, nil
+	}
+
+	// Priority 2: --goal-file flag
+	if flagGoalFile != "" {
+		return readGoalFile(flagGoalFile)
+	}
+
+	// Priority 3: Check if stdin has piped data
+	stat, _ := os.Stdin.Stat()
+	if (stat.Mode() & os.ModeCharDevice) == 0 {
+		// Data is being piped in
+		return readPipedStdin()
+	}
+
+	// Priority 4: Interactive stdin prompt
+	return readInteractiveStdin()
+}
+
+// readGoalFile reads goal from a file, auto-detecting format.
+// Supports plain text or markdown with frontmatter.
+func readGoalFile(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read goal file: %w", err)
+	}
+
+	text := string(content)
+
+	// Check for frontmatter (starts with ---)
+	if strings.HasPrefix(text, "---") {
+		return parseGoalFromFrontmatter(text)
+	}
+
+	// Plain text - return as-is (trimmed)
+	return strings.TrimSpace(text), nil
+}
+
+// parseGoalFromFrontmatter extracts goal from markdown with frontmatter.
+// Looks for 'goal:' field in frontmatter, falls back to body content.
+func parseGoalFromFrontmatter(content string) (string, error) {
+	lines := strings.Split(content, "\n")
+	if len(lines) < 2 || lines[0] != "---" {
+		return strings.TrimSpace(content), nil
+	}
+
+	// Find end of frontmatter
+	endIdx := -1
+	for i := 1; i < len(lines); i++ {
+		if lines[i] == "---" {
+			endIdx = i
+			break
+		}
+	}
+
+	if endIdx == -1 {
+		// No closing ---, treat as plain text
+		return strings.TrimSpace(content), nil
+	}
+
+	// Look for goal: field in frontmatter
+	for i := 1; i < endIdx; i++ {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "goal:") {
+			goalValue := strings.TrimSpace(strings.TrimPrefix(line, "goal:"))
+			// Remove quotes if present
+			goalValue = strings.Trim(goalValue, "\"'")
+			if goalValue != "" {
+				return goalValue, nil
+			}
+		}
+	}
+
+	// No goal field found, use body content (after frontmatter)
+	body := strings.Join(lines[endIdx+1:], "\n")
+	return strings.TrimSpace(body), nil
+}
+
+// readPipedStdin reads all data from piped stdin.
+func readPipedStdin() (string, error) {
+	data, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return "", fmt.Errorf("failed to read from stdin: %w", err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// readInteractiveStdin prompts user for goal input.
+// Two consecutive blank lines signal end of input.
+func readInteractiveStdin() (string, error) {
+	info := color.New(color.FgCyan).SprintFunc()
+	fmt.Printf("%s Enter goal (two blank lines to submit):\n", info(">>>"))
+
+	scanner := bufio.NewScanner(os.Stdin)
+	var lines []string
+	blankCount := 0
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			blankCount++
+			if blankCount >= 2 {
+				// Two consecutive blank lines - submit
+				break
+			}
+			lines = append(lines, line)
+		} else {
+			blankCount = 0
+			lines = append(lines, line)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("error reading stdin: %w", err)
+	}
+
+	// Remove trailing blank lines (we may have added one before detecting the double-blank)
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	return strings.Join(lines, "\n"), nil
+}
+
 func runRun(cmd *cobra.Command, args []string) error {
 	info := color.New(color.FgCyan).SprintFunc()
 	errColor := color.New(color.FgRed).SprintFunc()
+
+	// Resolve goal from various input sources
+	goal, err := resolveGoal()
+	if err != nil {
+		return fmt.Errorf("%s Failed to get goal: %w", errColor("ERROR"), err)
+	}
 
 	// Load config
 	cfg, err := config.Load(flagConfigPath)
@@ -169,7 +327,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 
 	// Create run context
 	ctx := &runner.RunContext{
-		Goal:       flagGoal,
+		Goal:       goal,
 		Ticket:     flagTicket,
 		Workflow:   flagWorkflow,
 		WorkDir:    workDir,
