@@ -8,4 +8,4 @@ Read the goal file at `thoughts/shared/runs/{ticket}/goal.md`.
 
 Find the plan in `thoughts/shared/plans/` containing `{ticket}` in the filename.
 
-Use `/implement_plan <path-to-plan>` with the plan you found.
+Use `/ff_implement_plan <path-to-plan>` with the plan you found.

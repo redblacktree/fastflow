@@ -17,8 +17,8 @@
       "stages": ["debug", "implement", "validate", "commit"]
     },
     "quick": {
-      "description": "Quick workflow when plan already exists",
-      "stages": ["implement", "validate", "commit"]
+      "description": "Quick workflow when plan isn't needed",
+      "stages": ["implement", "commit"]
     }
   },
 
@@ -30,9 +30,9 @@
       "judge_prompt": "Did the research stage produce useful findings? Check the CLI output for: 1) A research document was written to thoughts/shared/research/, 2) It contains relevant code locations and patterns, 3) It identifies key files related to the goal."
     },
     "debug": {
-      "skill": "debug",
+      "prompt_file": ".claude/stages/debug.md",
       "model": "sonnet",
-      "requires": [".claude/commands/debug.md"],
+      "requires": [],
       "judge_prompt": "Did the debug stage identify the issue? Check the CLI output for: 1) Root cause analysis was performed, 2) A fix or next steps were proposed."
     },
     "plan": {
