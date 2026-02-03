@@ -1,0 +1,5 @@
+# Binary (at root only)
+/fastflow
+
+# Claude Code local settings
+.claude/settings.local.json
