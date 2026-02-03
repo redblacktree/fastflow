@@ -26,38 +26,38 @@
     "research": {
       "prompt_file": ".claude/stages/research.md",
       "model": "sonnet",
-      "requires": [],
+      "requires": [".claude/commands/ff_research_codebase.md"],
       "judge_prompt": "Did the research stage produce useful findings? Check the CLI output for: 1) A research document was written to thoughts/shared/research/, 2) It contains relevant code locations and patterns, 3) It identifies key files related to the goal."
     },
     "debug": {
       "prompt_file": ".claude/stages/debug.md",
       "model": "sonnet",
-      "requires": [],
+      "requires": [".claude/commands/ff_debug.md"],
       "judge_prompt": "Did the debug stage identify the issue? Check the CLI output for: 1) Root cause analysis was performed, 2) A fix or next steps were proposed."
     },
     "plan": {
       "prompt_file": ".claude/stages/plan.md",
       "model": "opus",
       "checkpoint": true,
-      "requires": [],
+      "requires": [".claude/commands/ff_create_plan.md"],
       "judge_prompt": "Is the plan complete and actionable? Check the CLI output for: 1) A plan was written to thoughts/shared/plans/, 2) It has clear phases with specific changes, 3) It includes success criteria, 4) No open questions remain."
     },
     "implement": {
       "prompt_file": ".claude/stages/implement.md",
       "model": "sonnet",
-      "requires": [],
+      "requires": [".claude/commands/ff_implement_plan.md"],
       "judge_prompt": "Did implementation make progress? Check the CLI output for: 1) Code changes were made, 2) No critical errors occurred during implementation."
     },
     "validate": {
       "prompt_file": ".claude/stages/validate.md",
       "model": "sonnet",
-      "requires": [],
+      "requires": [".claude/commands/ff_validate_plan.md"],
       "judge_prompt": "Did validation pass? Check the CLI output for: 1) Tests were run, 2) Linting/type checking results, 3) Any failures documented with next steps."
     },
     "commit": {
       "prompt_file": ".claude/stages/commit.md",
       "model": "sonnet",
-      "requires": [],
+      "requires": [".claude/commands/ff_commit.md", ".claude/commands/ff_describe_pr.md"],
       "judge_prompt": "Was the commit/PR created? Check the CLI output for: 1) Changes were committed, 2) A PR was created if requested."
     }
   }
