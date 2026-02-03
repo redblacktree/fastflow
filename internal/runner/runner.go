@@ -16,10 +16,13 @@ import (
 
 // Runner orchestrates the execution of pipeline stages.
 type Runner struct {
-	Config     *config.Config
-	ConfigPath string
-	NoReview   bool
-	DryRun     bool
+	Config         *config.Config
+	ConfigPath     string
+	NoReview       bool
+	DryRun         bool
+	Debug          bool
+	// MaxResumptions is the maximum number of handoff/resume cycles per stage (default: 3).
+	MaxResumptions int
 }
 
 // RunContext contains the context for a pipeline run.
@@ -36,8 +39,9 @@ type RunContext struct {
 // NewRunner creates a new pipeline runner.
 func NewRunner(cfg *config.Config, configPath string) *Runner {
 	return &Runner{
-		Config:     cfg,
-		ConfigPath: configPath,
+		Config:         cfg,
+		ConfigPath:     configPath,
+		MaxResumptions: 3,
 	}
 }
 
@@ -122,6 +126,7 @@ func (r *Runner) Run(ctx *RunContext) error {
 // executeStage runs a single stage.
 func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.Stage) (*InvokeResult, error) {
 	invoker := NewClaudeInvoker(ctx.WorkDir)
+	invoker.Debug = r.Debug
 
 	model := stage.Model
 	if model == "" {
@@ -135,11 +140,75 @@ func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.S
 	}
 
 	// Execute based on whether it's a skill or prompt file
+	var result *InvokeResult
 	if stage.Skill != "" {
-		return invoker.InvokeWithSkill(stage.Skill, model, prompt)
+		result, err = invoker.InvokeWithSkill(stage.Skill, model, prompt)
+	} else {
+		result, err = invoker.Invoke(prompt, model)
+	}
+	if err != nil {
+		return nil, err
 	}
 
-	return invoker.Invoke(prompt, model)
+	// Handle max-turns with automatic handoff/resume
+	resumptions := 0
+	for result.HitMaxTurns && resumptions < r.MaxResumptions {
+		resumptions++
+		warning := color.New(color.FgYellow).SprintFunc()
+		fmt.Printf("    %s Max turns reached, attempting handoff/resume (%d/%d)...\n",
+			warning("RESUME"), resumptions, r.MaxResumptions)
+
+		// Run create_handoff to save state
+		handoffResult, handoffErr := r.runHandoffCycle(ctx, stageName, model, invoker)
+		if handoffErr != nil {
+			if r.Debug {
+				fmt.Printf("[DEBUG] Handoff/resume failed: %v\n", handoffErr)
+			}
+			// Continue with partial result rather than failing completely
+			break
+		}
+
+		// Combine outputs
+		result.Output += "\n\n--- [RESUMED AFTER MAX TURNS] ---\n\n" + handoffResult.Output
+		result.HitMaxTurns = handoffResult.HitMaxTurns
+		result.ExitCode = handoffResult.ExitCode
+	}
+
+	if result.HitMaxTurns && resumptions >= r.MaxResumptions {
+		warning := color.New(color.FgYellow).SprintFunc()
+		fmt.Printf("    %s Max resumptions (%d) reached, proceeding with partial result\n",
+			warning("WARN"), r.MaxResumptions)
+	}
+
+	return result, nil
+}
+
+// runHandoffCycle runs create_handoff followed by resume_handoff.
+func (r *Runner) runHandoffCycle(ctx *RunContext, stageName string, model string, invoker *ClaudeInvoker) (*InvokeResult, error) {
+	// Step 1: Create handoff document
+	handoffContext := fmt.Sprintf("Stage: %s\nTicket: %s\nGoal: %s\nRun directory: %s",
+		stageName, ctx.Ticket, ctx.Goal, ctx.RunDir)
+
+	if r.Debug {
+		fmt.Printf("[DEBUG] Running create_handoff skill...\n")
+	}
+
+	_, createErr := invoker.InvokeWithSkill("create_handoff", model, handoffContext)
+	if createErr != nil {
+		return nil, fmt.Errorf("create_handoff failed: %w", createErr)
+	}
+
+	// Step 2: Resume from handoff
+	if r.Debug {
+		fmt.Printf("[DEBUG] Running resume_handoff skill...\n")
+	}
+
+	resumeResult, resumeErr := invoker.InvokeWithSkill("resume_handoff", model, handoffContext)
+	if resumeErr != nil {
+		return nil, fmt.Errorf("resume_handoff failed: %w", resumeErr)
+	}
+
+	return resumeResult, nil
 }
 
 // buildStagePrompt constructs the prompt for a stage.
@@ -187,6 +256,7 @@ func (r *Runner) injectPlaceholders(prompt string, ctx *RunContext) string {
 // evaluateStage runs the judge evaluation for a completed stage.
 func (r *Runner) evaluateStage(ctx *RunContext, stageName string, stage *config.Stage, result *InvokeResult) (*judge.Result, error) {
 	j := judge.NewJudge(r.Config.JudgeModel)
+	j.Debug = r.Debug
 
 	judgePrompt := stage.JudgePrompt
 	if judgePrompt == "" {

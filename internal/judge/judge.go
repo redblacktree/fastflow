@@ -18,6 +18,10 @@ type Result struct {
 type Judge struct {
 	// Model is the Claude model to use (default: haiku).
 	Model string
+	// MaxTurns is the maximum turns for evaluation (default: 5).
+	MaxTurns int
+	// Debug enables verbose output logging.
+	Debug bool
 }
 
 // NewJudge creates a new judge with the given model.
@@ -25,22 +29,41 @@ func NewJudge(model string) *Judge {
 	if model == "" {
 		model = "haiku"
 	}
-	return &Judge{Model: model}
+	return &Judge{
+		Model:    model,
+		MaxTurns: 5,
+		Debug:    false,
+	}
 }
 
 // Evaluate runs the judge evaluation for a completed stage.
 func (j *Judge) Evaluate(ctx *EvaluationContext) (*Result, error) {
 	prompt := j.buildPrompt(ctx)
 
-	// Run Claude with the judge prompt
-	cmd := exec.Command("claude",
+	args := []string{
 		"--model", j.Model,
 		"--print",
-		"--max-turns", "1",
-		prompt,
-	)
+		"--max-turns", fmt.Sprintf("%d", j.MaxTurns),
+	}
+	args = append(args, prompt)
+
+	if j.Debug {
+		fmt.Printf("[DEBUG] Judge command: claude %v\n", args[:len(args)-1]) // Don't print full prompt
+		fmt.Printf("[DEBUG] Judge prompt length: %d chars\n", len(prompt))
+	}
+
+	// Run Claude with the judge prompt
+	cmd := exec.Command("claude", args...)
 
 	output, err := cmd.CombinedOutput()
+
+	if j.Debug {
+		fmt.Printf("[DEBUG] Judge raw output (%d chars):\n%s\n", len(output), string(output))
+		if err != nil {
+			fmt.Printf("[DEBUG] Judge error: %v\n", err)
+		}
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("judge evaluation failed: %w\nOutput: %s", err, string(output))
 	}

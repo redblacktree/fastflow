@@ -74,6 +74,7 @@ var (
 	flagNoReview   bool
 	flagConfigPath string
 	flagDryRun     bool
+	flagDebug      bool
 )
 
 func init() {
@@ -84,6 +85,7 @@ func init() {
 	runCmd.Flags().BoolVar(&flagNoReview, "no-review", false, "Skip checkpoint pauses")
 	runCmd.Flags().StringVar(&flagConfigPath, "config", "", "Path to config file (default: orchestrator.json)")
 	runCmd.Flags().BoolVar(&flagDryRun, "dry-run", false, "Show what would run without executing")
+	runCmd.Flags().BoolVar(&flagDebug, "debug", false, "Enable verbose debug output")
 
 	runCmd.MarkFlagRequired("goal")
 	runCmd.MarkFlagRequired("ticket")
@@ -160,6 +162,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	r := runner.NewRunner(cfg, flagConfigPath)
 	r.NoReview = flagNoReview
 	r.DryRun = flagDryRun
+	r.Debug = flagDebug
 
 	return r.Run(ctx)
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // ClaudeInvoker handles invocation of the Claude CLI.
@@ -17,6 +18,8 @@ type ClaudeInvoker struct {
 	MaxTurns int
 	// SkipPermissions enables --dangerously-skip-permissions flag.
 	SkipPermissions bool
+	// Debug enables verbose output logging.
+	Debug bool
 }
 
 // NewClaudeInvoker creates a new Claude invoker with default settings.
@@ -30,8 +33,9 @@ func NewClaudeInvoker(workDir string) *ClaudeInvoker {
 
 // InvokeResult contains the result of a Claude invocation.
 type InvokeResult struct {
-	Output   string
-	ExitCode int
+	Output       string
+	ExitCode     int
+	HitMaxTurns  bool
 }
 
 // Invoke runs Claude with the given prompt and model.
@@ -47,6 +51,12 @@ func (c *ClaudeInvoker) Invoke(prompt string, model string) (*InvokeResult, erro
 	}
 
 	args = append(args, prompt)
+
+	if c.Debug {
+		fmt.Printf("[DEBUG] Claude command: claude %v\n", args[:len(args)-1]) // Don't print full prompt
+		fmt.Printf("[DEBUG] Prompt length: %d chars\n", len(prompt))
+		fmt.Printf("[DEBUG] Working directory: %s\n", c.WorkDir)
+	}
 
 	cmd := exec.Command("claude", args...)
 	cmd.Dir = c.WorkDir
@@ -67,12 +77,31 @@ func (c *ClaudeInvoker) Invoke(prompt string, model string) (*InvokeResult, erro
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			result.ExitCode = exitErr.ExitCode()
+			if c.Debug {
+				fmt.Printf("[DEBUG] Claude exited with code: %d\n", result.ExitCode)
+			}
 		} else {
 			return nil, fmt.Errorf("failed to run claude: %w", err)
 		}
 	}
 
+	if c.Debug {
+		fmt.Printf("[DEBUG] Claude output length: %d chars\n", len(result.Output))
+	}
+
+	// Detect if max-turns was hit
+	result.HitMaxTurns = isMaxTurnsError(result.Output)
+	if c.Debug && result.HitMaxTurns {
+		fmt.Printf("[DEBUG] Max turns limit detected in output\n")
+	}
+
 	return result, nil
+}
+
+// isMaxTurnsError checks if the output indicates max turns was reached.
+func isMaxTurnsError(output string) bool {
+	return strings.Contains(output, "Reached max turns") ||
+		strings.Contains(output, "Error: Reached max turns")
 }
 
 // InvokeWithSkill runs Claude with a skill command.
