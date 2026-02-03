@@ -8,6 +8,7 @@ import (
 
 	"github.com/dustinrasener/fastflow/internal/config"
 	"github.com/dustinrasener/fastflow/internal/runner"
+	"github.com/dustinrasener/fastflow/internal/worktree"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
@@ -75,6 +76,7 @@ var (
 	flagConfigPath string
 	flagDryRun     bool
 	flagDebug      bool
+	flagResume     string
 )
 
 func init() {
@@ -86,6 +88,7 @@ func init() {
 	runCmd.Flags().StringVar(&flagConfigPath, "config", "", "Path to config file (default: orchestrator.json)")
 	runCmd.Flags().BoolVar(&flagDryRun, "dry-run", false, "Show what would run without executing")
 	runCmd.Flags().BoolVar(&flagDebug, "debug", false, "Enable verbose debug output")
+	runCmd.Flags().StringVar(&flagResume, "resume", "auto", "Resume behavior: auto (default), true, false, or force")
 
 	runCmd.MarkFlagRequired("goal")
 	runCmd.MarkFlagRequired("ticket")
@@ -137,6 +140,13 @@ func runRun(cmd *cobra.Command, args []string) error {
 	// Setup worktree (or use current directory)
 	workDir := cwd
 	branchName := flagTicket
+	worktreeExisted := false
+
+	// Check if worktree already exists
+	mgr, err := worktree.NewManager(cwd)
+	if err == nil {
+		worktreeExisted = mgr.Exists(flagTicket)
+	}
 
 	fmt.Printf("%s Setting up worktree for ticket: %s\n", info(">>>"), flagTicket)
 	wtPath, err := runner.SetupWorktree(flagTicket)
@@ -144,7 +154,17 @@ func runRun(cmd *cobra.Command, args []string) error {
 		fmt.Printf("    Note: Using current directory (worktree creation failed: %v)\n", err)
 	} else {
 		workDir = wtPath
-		fmt.Printf("    Worktree: %s\n", workDir)
+		if worktreeExisted {
+			fmt.Printf("    Worktree: %s (existing)\n", workDir)
+		} else {
+			fmt.Printf("    Worktree: %s (created)\n", workDir)
+		}
+	}
+
+	// Adjust resume flag for auto mode when worktree is new
+	resumeMode := flagResume
+	if resumeMode == "auto" && !worktreeExisted {
+		resumeMode = "false" // Fresh worktree, no need to check for state
 	}
 
 	// Create run context
@@ -163,6 +183,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	r.NoReview = flagNoReview
 	r.DryRun = flagDryRun
 	r.Debug = flagDebug
+	r.Resume = resumeMode
 
 	return r.Run(ctx)
 }

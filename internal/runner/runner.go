@@ -10,6 +10,7 @@ import (
 
 	"github.com/dustinrasener/fastflow/internal/config"
 	"github.com/dustinrasener/fastflow/internal/judge"
+	"github.com/dustinrasener/fastflow/internal/state"
 	"github.com/dustinrasener/fastflow/internal/worktree"
 	"github.com/fatih/color"
 )
@@ -21,6 +22,7 @@ type Runner struct {
 	NoReview       bool
 	DryRun         bool
 	Debug          bool
+	Resume         string // "auto", "true", "false", or "force"
 	// MaxResumptions is the maximum number of handoff/resume cycles per stage (default: 3).
 	MaxResumptions int
 }
@@ -56,22 +58,48 @@ func (r *Runner) Run(ctx *RunContext) error {
 	info := color.New(color.FgCyan).SprintFunc()
 	success := color.New(color.FgGreen).SprintFunc()
 	errColor := color.New(color.FgRed).SprintFunc()
+	warning := color.New(color.FgYellow).SprintFunc()
 	bold := color.New(color.Bold).SprintFunc()
 
 	fmt.Printf("\n%s Running workflow: %s\n", info(">>>"), bold(ctx.Workflow))
 	fmt.Printf("    Goal: %s\n", ctx.Goal)
 	fmt.Printf("    Ticket: %s\n", ctx.Ticket)
 	fmt.Printf("    Working directory: %s\n", ctx.WorkDir)
-	fmt.Printf("    Run directory: %s\n\n", ctx.RunDir)
+	fmt.Printf("    Run directory: %s\n", ctx.RunDir)
+
+	// Determine resume behavior
+	shouldResume, pipelineState, err := r.determineResumeState(ctx, workflow)
+	if err != nil {
+		return err
+	}
+
+	if shouldResume && pipelineState != nil {
+		fmt.Printf("    Resume mode: %s (skipping %d completed stages)\n\n",
+			success("ENABLED"), len(pipelineState.CompletedStages))
+	} else {
+		fmt.Printf("    Resume mode: %s\n\n", warning("DISABLED"))
+	}
 
 	// Create the run directory
 	if err := os.MkdirAll(ctx.RunDir, 0755); err != nil {
 		return fmt.Errorf("failed to create run directory: %w", err)
 	}
 
-	// Write the goal file
+	// Initialize or use existing state
+	if pipelineState == nil {
+		pipelineState = state.NewState(ctx.Workflow, workflow.Stages)
+	}
+
+	// Write the goal file (always, to ensure it's current)
 	if err := r.writeGoalFile(ctx); err != nil {
 		return fmt.Errorf("failed to write goal file: %w", err)
+	}
+
+	// Check if all stages are already complete
+	if shouldResume && len(pipelineState.CompletedStages) == len(workflow.Stages) {
+		fmt.Printf("%s All stages already complete!\n", success("SUCCESS"))
+		fmt.Printf("    To re-run from scratch, use: --resume=false\n")
+		return nil
 	}
 
 	// Execute each stage
@@ -79,6 +107,13 @@ func (r *Runner) Run(ctx *RunContext) error {
 		stage, err := r.Config.GetStage(stageName)
 		if err != nil {
 			return err
+		}
+
+		// Skip completed stages if resuming
+		if shouldResume && pipelineState.IsStageComplete(stageName) {
+			fmt.Printf("%s Stage %d/%d: %s %s\n", info(">>>"), i+1, len(workflow.Stages),
+				bold(stageName), success("[SKIPPED - already complete]"))
+			continue
 		}
 
 		fmt.Printf("%s Stage %d/%d: %s\n", info(">>>"), i+1, len(workflow.Stages), bold(stageName))
@@ -108,6 +143,11 @@ func (r *Runner) Run(ctx *RunContext) error {
 			return fmt.Errorf("stage %s failed evaluation: %s", stageName, judgeResult.Reasoning)
 		}
 
+		// Mark stage as complete
+		if err := pipelineState.MarkStageComplete(ctx.RunDir, stageName); err != nil {
+			fmt.Printf("    %s Failed to save state: %v\n", warning("WARN"), err)
+		}
+
 		fmt.Printf("    %s Stage completed successfully\n", success("PASS"))
 		fmt.Printf("    %s\n\n", judgeResult.Reasoning)
 
@@ -120,6 +160,85 @@ func (r *Runner) Run(ctx *RunContext) error {
 	}
 
 	fmt.Printf("\n%s Pipeline completed successfully!\n", success("SUCCESS"))
+	return nil
+}
+
+// determineResumeState decides whether to resume and loads existing state.
+func (r *Runner) determineResumeState(ctx *RunContext, workflow *config.Workflow) (bool, *state.PipelineState, error) {
+	errColor := color.New(color.FgRed).SprintFunc()
+
+	// Load existing state if present
+	existingState, err := state.Load(ctx.RunDir)
+	if err != nil {
+		return false, nil, fmt.Errorf("failed to load state: %w", err)
+	}
+
+	// Determine if we should resume based on flag
+	shouldResume := false
+	switch r.Resume {
+	case "false":
+		// Explicit fresh start - clear run directory
+		if existingState != nil {
+			if err := r.clearRunDirectory(ctx.RunDir); err != nil {
+				return false, nil, fmt.Errorf("failed to clear run directory: %w", err)
+			}
+		}
+		return false, nil, nil
+
+	case "true":
+		// Explicit resume - must have existing state
+		if existingState == nil {
+			return false, nil, fmt.Errorf("--resume=true specified but no existing state found")
+		}
+		shouldResume = true
+
+	case "force":
+		// Force resume - skip config validation
+		if existingState == nil {
+			return false, nil, fmt.Errorf("--resume=force specified but no existing state found")
+		}
+		return true, existingState, nil
+
+	default: // "auto"
+		// Auto-detect based on existing state
+		shouldResume = existingState != nil && len(existingState.CompletedStages) > 0
+	}
+
+	// Validate config hasn't changed (unless force)
+	if shouldResume && existingState != nil {
+		currentHash := state.ComputeConfigHash(ctx.Workflow, workflow.Stages)
+		if existingState.ConfigHash != currentHash {
+			return false, nil, fmt.Errorf(
+				"%s Config has changed since last run (workflow or stages modified).\n"+
+					"    Use --resume=false to start fresh, or --resume=force to continue anyway",
+				errColor("ERROR"))
+		}
+		if existingState.Workflow != ctx.Workflow {
+			return false, nil, fmt.Errorf(
+				"%s Workflow changed from %q to %q.\n"+
+					"    Use --resume=false to start fresh, or --resume=force to continue anyway",
+				errColor("ERROR"), existingState.Workflow, ctx.Workflow)
+		}
+	}
+
+	return shouldResume, existingState, nil
+}
+
+// clearRunDirectory removes all files in the run directory.
+func (r *Runner) clearRunDirectory(runDir string) error {
+	entries, err := os.ReadDir(runDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		path := filepath.Join(runDir, entry.Name())
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

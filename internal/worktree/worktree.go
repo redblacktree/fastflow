@@ -46,6 +46,13 @@ func (m *Manager) WorktreePath(ticket string) string {
 	return filepath.Join(m.BaseDir, m.RepoName, ticket)
 }
 
+// Exists checks if a worktree already exists for the given ticket.
+func (m *Manager) Exists(ticket string) bool {
+	wtPath := m.WorktreePath(ticket)
+	_, err := os.Stat(wtPath)
+	return err == nil
+}
+
 // Create creates a new worktree for the given ticket.
 // It creates a new branch from the main branch.
 func (m *Manager) Create(ticket string) (string, error) {
