@@ -3,6 +3,7 @@ package runner
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,10 @@ import (
 	"github.com/fatih/color"
 )
 
+const (
+	maxInteractionAttempts = 3
+)
+
 // Runner orchestrates the execution of pipeline stages.
 type Runner struct {
 	Config         *config.Config
@@ -25,6 +30,8 @@ type Runner struct {
 	Resume         string // "auto", "true", "false", or "force"
 	// MaxResumptions is the maximum number of handoff/resume cycles per stage (default: 3).
 	MaxResumptions int
+	// Interactive controls whether to prompt human for input (true) or auto-answer (false).
+	Interactive bool
 }
 
 // RunContext contains the context for a pipeline run.
@@ -135,6 +142,53 @@ func (r *Runner) Run(ctx *RunContext) error {
 		if err != nil {
 			fmt.Printf("    %s Judge evaluation failed: %v\n", errColor("ERROR"), err)
 			return err
+		}
+
+		// Handle interactive prompts
+		interactionAttempts := 0
+		for judgeResult.Interactive && interactionAttempts < maxInteractionAttempts {
+			interactionAttempts++
+
+			if r.Debug {
+				fmt.Printf("[DEBUG] Question detected: %s\n", judgeResult.Reasoning)
+			}
+
+			var answer string
+			if r.Interactive {
+				// Human-in-the-loop mode: Prompt human for input
+				fmt.Printf("    %s Interactive prompt detected, waiting for human input...\n",
+					warning("INTERACTIVE"))
+				answer, err = r.promptHumanForAnswer(judgeResult.Reasoning)
+				if err != nil {
+					fmt.Printf("    %s Failed to get human input: %v\n", errColor("ERROR"), err)
+					return err
+				}
+				result, err = r.continueWithAnswer(ctx, stageName, stage, result, judgeResult.Reasoning, answer)
+			} else {
+				// Auto-answer mode: Claude answers its own question
+				fmt.Printf("    %s Interactive prompt detected, auto-answering (%d/%d)...\n",
+					warning("INTERACTIVE"), interactionAttempts, maxInteractionAttempts)
+				result, err = r.selfAnswer(ctx, stageName, stage, result, judgeResult.Reasoning)
+			}
+
+			if err != nil {
+				fmt.Printf("    %s Continuation failed: %v\n", errColor("ERROR"), err)
+				return err
+			}
+
+			// Re-evaluate
+			judgeResult, err = r.evaluateStage(ctx, stageName, stage, result)
+			if err != nil {
+				fmt.Printf("    %s Judge evaluation failed: %v\n", errColor("ERROR"), err)
+				return err
+			}
+		}
+
+		if judgeResult.Interactive && interactionAttempts >= maxInteractionAttempts {
+			fmt.Printf("    %s Max interaction attempts (%d) reached\n",
+				warning("WARN"), maxInteractionAttempts)
+			return fmt.Errorf("stage %s still requires input after %d attempts: %s",
+				stageName, maxInteractionAttempts, judgeResult.Reasoning)
 		}
 
 		if !judgeResult.Success {
@@ -456,4 +510,127 @@ func SetupWorktree(ticket string) (string, error) {
 // GetRunDir returns the run directory path for a ticket.
 func GetRunDir(workDir, ticket string) string {
 	return filepath.Join(workDir, "thoughts", "shared", "runs", ticket)
+}
+
+// selfAnswer re-invokes Claude with context to answer its own question.
+func (r *Runner) selfAnswer(ctx *RunContext, stageName string, stage *config.Stage, previousResult *InvokeResult, question string) (*InvokeResult, error) {
+	invoker := NewClaudeInvoker(ctx.WorkDir)
+	invoker.Debug = r.Debug
+
+	model := stage.Model
+	if model == "" {
+		model = "sonnet"
+	}
+
+	prompt := fmt.Sprintf(`You previously asked a question or presented options while working on a task.
+
+**Original Goal**: %s
+**Ticket**: %s
+
+**Question/Prompt You Asked**:
+%s
+
+**Your Previous Output** (for context):
+%s
+
+---
+
+Based on the original goal and context above, answer your own question and continue with the task. Make reasonable decisions based on:
+1. The stated goal and requirements
+2. Best practices and common patterns
+3. The simplest approach that achieves the goal
+
+Do NOT ask for further clarification. Make a decision and proceed with the implementation.
+`, ctx.Goal, ctx.Ticket, question, truncateForContext(previousResult.Output, 5000))
+
+	return invoker.Invoke(prompt, model)
+}
+
+// promptHumanForAnswer displays the question and reads human input from stdin.
+func (r *Runner) promptHumanForAnswer(question string) (string, error) {
+	info := color.New(color.FgCyan).SprintFunc()
+	bold := color.New(color.Bold).SprintFunc()
+
+	fmt.Printf("\n%s %s\n", info("QUESTION:"), bold(question))
+	fmt.Printf("%s Enter your answer (two blank lines to submit):\n", info(">>>"))
+
+	reader := bufio.NewReader(os.Stdin)
+	var lines []string
+	blankCount := 0
+
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return "", fmt.Errorf("error reading input: %w", err)
+		}
+
+		line = strings.TrimRight(line, "\n\r")
+
+		if line == "" {
+			blankCount++
+			if blankCount >= 2 {
+				break
+			}
+			lines = append(lines, line)
+		} else {
+			blankCount = 0
+			lines = append(lines, line)
+		}
+	}
+
+	// Remove trailing blank lines
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	answer := strings.Join(lines, "\n")
+	if answer == "" {
+		return "", fmt.Errorf("no input provided")
+	}
+
+	return answer, nil
+}
+
+// continueWithAnswer re-invokes Claude with the human's answer to continue the task.
+func (r *Runner) continueWithAnswer(ctx *RunContext, stageName string, stage *config.Stage, previousResult *InvokeResult, question string, answer string) (*InvokeResult, error) {
+	invoker := NewClaudeInvoker(ctx.WorkDir)
+	invoker.Debug = r.Debug
+
+	model := stage.Model
+	if model == "" {
+		model = "sonnet"
+	}
+
+	prompt := fmt.Sprintf(`You previously asked a question while working on a task. The human has provided their answer.
+
+**Original Goal**: %s
+**Ticket**: %s
+
+**Question You Asked**:
+%s
+
+**Human's Answer**:
+%s
+
+**Your Previous Output** (for context):
+%s
+
+---
+
+Continue with the task based on the human's answer. Proceed with the implementation.
+`, ctx.Goal, ctx.Ticket, question, answer, truncateForContext(previousResult.Output, 5000))
+
+	return invoker.Invoke(prompt, model)
+}
+
+// truncateForContext truncates output to fit within context limits.
+func truncateForContext(output string, maxLen int) string {
+	if len(output) <= maxLen {
+		return output
+	}
+	half := maxLen / 2
+	return output[:half] + "\n\n... [truncated] ...\n\n" + output[len(output)-half:]
 }

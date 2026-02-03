@@ -10,8 +10,9 @@ import (
 
 // Result represents the outcome of a judge evaluation.
 type Result struct {
-	Success   bool
-	Reasoning string
+	Success     bool
+	Interactive bool   // True if stage is waiting for user input
+	Reasoning   string
 }
 
 // Judge evaluates whether a stage completed successfully.
@@ -131,6 +132,9 @@ func (j *Judge) buildPrompt(ctx *EvaluationContext) string {
 	sb.WriteString("Respond with EXACTLY one of:\n")
 	sb.WriteString("- `YES: <brief explanation of why it succeeded>`\n")
 	sb.WriteString("- `NO: <brief explanation of what failed or is missing>`\n")
+	sb.WriteString("- `INTERACTIVE: <the question or input the stage is waiting for>`\n")
+	sb.WriteString("\nUse INTERACTIVE when the output shows Claude asking a question, ")
+	sb.WriteString("presenting options for the user to choose, or explicitly waiting for input.\n")
 
 	return sb.String()
 }
@@ -158,7 +162,15 @@ func (j *Judge) parseResponse(response string) (*Result, error) {
 		return &Result{Success: false, Reasoning: reasoning}, nil
 	}
 
-	// If we can't parse a clear YES/NO, treat as failure
+	if strings.HasPrefix(upper, "INTERACTIVE") {
+		reasoning := response
+		if idx := strings.Index(response, ":"); idx != -1 {
+			reasoning = strings.TrimSpace(response[idx+1:])
+		}
+		return &Result{Interactive: true, Reasoning: reasoning}, nil
+	}
+
+	// If we can't parse a clear YES/NO/INTERACTIVE, treat as failure
 	return &Result{
 		Success:   false,
 		Reasoning: fmt.Sprintf("Could not parse judge response: %s", response),

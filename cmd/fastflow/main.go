@@ -87,15 +87,16 @@ var versionCmd = &cobra.Command{
 
 // Flags
 var (
-	flagGoal       string
-	flagGoalFile   string
-	flagTicket     string
-	flagWorkflow   string
-	flagNoReview   bool
-	flagConfigPath string
-	flagDryRun     bool
-	flagDebug      bool
-	flagResume     string
+	flagGoal        string
+	flagGoalFile    string
+	flagTicket      string
+	flagWorkflow    string
+	flagNoReview    bool
+	flagConfigPath  string
+	flagDryRun      bool
+	flagDebug       bool
+	flagResume      string
+	flagInteractive bool
 )
 
 func init() {
@@ -109,6 +110,7 @@ func init() {
 	runCmd.Flags().BoolVar(&flagDryRun, "dry-run", false, "Show what would run without executing")
 	runCmd.Flags().BoolVar(&flagDebug, "debug", false, "Enable verbose debug output")
 	runCmd.Flags().StringVar(&flagResume, "resume", "auto", "Resume behavior: auto (default), true, false, or force")
+	runCmd.Flags().BoolVarP(&flagInteractive, "interactive", "i", false, "Prompt for human input on interactive questions (default: auto-answer)")
 
 	// Only ticket is required - goal can come from multiple sources
 	_ = runCmd.MarkFlagRequired("ticket")
@@ -342,6 +344,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	r.DryRun = flagDryRun
 	r.Debug = flagDebug
 	r.Resume = resumeMode
+	r.Interactive = flagInteractive
 
 	return r.Run(ctx)
 }
