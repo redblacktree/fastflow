@@ -6,7 +6,7 @@ description: Create git commits without Claude attribution
 
 You are tasked with creating git commits for the changes made during this session.
 
-**Execute commits immediately - do NOT ask for confirmation.**
+**CRITICAL: Execute commits immediately - do NOT ask for confirmation.**
 
 ## Process:
 
