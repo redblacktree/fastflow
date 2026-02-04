@@ -11,6 +11,7 @@ import (
 
 	"github.com/dustinrasener/fastflow/internal/config"
 	"github.com/dustinrasener/fastflow/internal/runner"
+	"github.com/dustinrasener/fastflow/internal/state"
 	"github.com/dustinrasener/fastflow/internal/worktree"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -97,6 +98,7 @@ var (
 	flagDebug       bool
 	flagResume      string
 	flagInteractive bool
+	flagForce       bool
 )
 
 func init() {
@@ -111,6 +113,7 @@ func init() {
 	runCmd.Flags().BoolVar(&flagDebug, "debug", false, "Enable verbose debug output")
 	runCmd.Flags().StringVar(&flagResume, "resume", "auto", "Resume behavior: auto (default), true, false, or force")
 	runCmd.Flags().BoolVarP(&flagInteractive, "interactive", "i", false, "Prompt for human input on interactive questions (default: auto-answer)")
+	runCmd.Flags().BoolVarP(&flagForce, "force", "f", false, "Skip confirmation when ticket already has existing work")
 
 	// Only ticket is required - goal can come from multiple sources
 	_ = runCmd.MarkFlagRequired("ticket")
@@ -256,6 +259,39 @@ func readInteractiveStdin() (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
+// confirmCollision prompts the user to confirm continuing with an existing ticket.
+// Returns true if the user confirms, false otherwise.
+// If stdin is not a terminal (piped input), returns true without prompting.
+func confirmCollision(ticket string, hasWorktree bool, hasState bool) bool {
+	// Check if stdin is a terminal
+	stat, _ := os.Stdin.Stat()
+	if (stat.Mode() & os.ModeCharDevice) == 0 {
+		// Non-interactive (piped input), skip confirmation
+		return true
+	}
+
+	warning := color.New(color.FgYellow).SprintFunc()
+	bold := color.New(color.Bold).SprintFunc()
+
+	fmt.Printf("\n%s Existing work found for ticket %s:\n", warning("WARNING"), bold(ticket))
+	if hasWorktree {
+		fmt.Printf("    - Worktree already exists\n")
+	}
+	if hasState {
+		fmt.Printf("    - Pipeline state already exists\n")
+	}
+	fmt.Printf("\nContinue? [y/N] ")
+
+	reader := bufio.NewReader(os.Stdin)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		return false
+	}
+
+	response = strings.TrimSpace(strings.ToLower(response))
+	return response == "y" || response == "yes"
+}
+
 func runRun(cmd *cobra.Command, args []string) error {
 	info := color.New(color.FgCyan).SprintFunc()
 	errColor := color.New(color.FgRed).SprintFunc()
@@ -306,6 +342,25 @@ func runRun(cmd *cobra.Command, args []string) error {
 	mgr, err := worktree.NewManager(cwd)
 	if err == nil {
 		worktreeExisted = mgr.Exists(flagTicket)
+	}
+
+	// Check if state already exists (indicates prior work)
+	stateExisted := false
+	potentialRunDir := runner.GetRunDir(cwd, flagTicket)
+	if worktreeExisted {
+		// If worktree exists, check state in the worktree
+		wtPath := mgr.WorktreePath(flagTicket)
+		potentialRunDir = runner.GetRunDir(wtPath, flagTicket)
+	}
+	existingState, _ := state.Load(potentialRunDir)
+	stateExisted = existingState != nil
+
+	// Confirm collision if ticket has existing work
+	if (worktreeExisted || stateExisted) && !flagForce {
+		if !confirmCollision(flagTicket, worktreeExisted, stateExisted) {
+			fmt.Printf("Aborted.\n")
+			return nil
+		}
 	}
 
 	fmt.Printf("%s Setting up worktree for ticket: %s\n", info(">>>"), flagTicket)
