@@ -4,4 +4,5 @@
 # Claude Code local settings
 .claude/settings.local.json
 
-thoughts/**
+# Internal workflow state
+thoughts/
