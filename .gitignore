@@ -3,3 +3,6 @@
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Internal workflow state
+thoughts/
