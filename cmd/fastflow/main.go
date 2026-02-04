@@ -260,13 +260,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	info := color.New(color.FgCyan).SprintFunc()
 	errColor := color.New(color.FgRed).SprintFunc()
 
-	// Resolve goal from various input sources
-	goal, err := resolveGoal()
-	if err != nil {
-		return fmt.Errorf("%s Failed to get goal: %w", errColor("ERROR"), err)
-	}
-
-	// Load config
+	// Load config first (needed to check workflow settings)
 	cfg, err := config.Load(flagConfigPath)
 	if err != nil {
 		return fmt.Errorf("%s Failed to load config: %w", errColor("ERROR"), err)
@@ -278,17 +272,29 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("%s %s", errColor("ERROR"), result.Error())
 	}
 
-	// Validate workflow exists
-	if flagWorkflow != "" {
-		if _, err := cfg.GetWorkflow(flagWorkflow); err != nil {
-			return fmt.Errorf("%s %w", errColor("ERROR"), err)
-		}
+	// Get the workflow to check if it requires a goal
+	workflowName := flagWorkflow
+	if workflowName == "" {
+		workflowName = cfg.DefaultWorkflow
+	}
+	workflow, err := cfg.GetWorkflow(workflowName)
+	if err != nil {
+		return fmt.Errorf("%s %w", errColor("ERROR"), err)
 	}
 
 	// Validate dependencies
 	depResult := config.ValidateDependencies(cfg)
 	if !depResult.IsValid() {
 		return fmt.Errorf("%s %s", errColor("ERROR"), depResult.Error())
+	}
+
+	// Resolve goal from various input sources (unless workflow skips goal)
+	var goal string
+	if !workflow.SkipGoal {
+		goal, err = resolveGoal()
+		if err != nil {
+			return fmt.Errorf("%s Failed to get goal: %w", errColor("ERROR"), err)
+		}
 	}
 
 	// Get current working directory

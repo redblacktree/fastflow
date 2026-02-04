@@ -261,17 +261,28 @@ func (r *Runner) determineResumeState(ctx *RunContext, workflow *config.Workflow
 	// Validate config hasn't changed (unless force)
 	if shouldResume && existingState != nil {
 		currentHash := state.ComputeConfigHash(ctx.Workflow, workflow.Stages)
-		if existingState.ConfigHash != currentHash {
+		configChanged := existingState.ConfigHash != currentHash
+		workflowChanged := existingState.Workflow != ctx.Workflow
+
+		if configChanged || workflowChanged {
+			if workflow.IgnoreConfigChange {
+				// Workflow configured to start fresh on config change instead of erroring
+				if err := r.clearRunDirectory(ctx.RunDir); err != nil {
+					return false, nil, fmt.Errorf("failed to clear run directory: %w", err)
+				}
+				return false, nil, nil
+			}
+			// Error with guidance
+			if workflowChanged {
+				return false, nil, fmt.Errorf(
+					"%s Workflow changed from %q to %q.\n"+
+						"    Use --resume=false to start fresh, or --resume=force to continue anyway",
+					errColor("ERROR"), existingState.Workflow, ctx.Workflow)
+			}
 			return false, nil, fmt.Errorf(
 				"%s Config has changed since last run (workflow or stages modified).\n"+
 					"    Use --resume=false to start fresh, or --resume=force to continue anyway",
 				errColor("ERROR"))
-		}
-		if existingState.Workflow != ctx.Workflow {
-			return false, nil, fmt.Errorf(
-				"%s Workflow changed from %q to %q.\n"+
-					"    Use --resume=false to start fresh, or --resume=force to continue anyway",
-				errColor("ERROR"), existingState.Workflow, ctx.Workflow)
 		}
 	}
 
