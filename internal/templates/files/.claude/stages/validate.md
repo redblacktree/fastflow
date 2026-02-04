@@ -6,4 +6,4 @@ description: Validate the implementation
 
 Find the plan in `thoughts/shared/plans/` containing `{ticket}` in the filename.
 
-Use `/validate_plan <path-to-plan>` with the plan you found.
+Use `/ff_validate_plan <path-to-plan>` with the plan you found.
