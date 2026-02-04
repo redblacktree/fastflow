@@ -11,7 +11,7 @@ import (
 
 	"github.com/dustinrasener/fastflow/internal/config"
 	"github.com/dustinrasener/fastflow/internal/runner"
-	"github.com/dustinrasener/fastflow/internal/state"
+	"github.com/dustinrasener/fastflow/internal/templates"
 	"github.com/dustinrasener/fastflow/internal/worktree"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -86,6 +86,30 @@ var versionCmd = &cobra.Command{
 	},
 }
 
+var initCmd = &cobra.Command{
+	Use:   "init",
+	Short: "Initialize fastflow in the current directory",
+	Long: `Initialize fastflow configuration and supporting files in the current directory.
+
+This creates the following:
+  - orchestrator.json - Main configuration file
+  - .claude/stages/   - Stage prompt templates
+  - .claude/commands/ - Claude Code skill definitions
+  - .claude/agents/   - Sub-agent configurations
+  - thoughts/shared/  - Runtime directories for plans, research, etc.
+
+Examples:
+  # Initialize in current directory
+  fastflow init
+
+  # Force overwrite existing files
+  fastflow init --force
+
+  # Preview what would be written
+  fastflow init --dry-run`,
+	RunE: runInit,
+}
+
 // Flags
 var (
 	flagGoal        string
@@ -98,7 +122,7 @@ var (
 	flagDebug       bool
 	flagResume      string
 	flagInteractive bool
-	flagForce       bool
+	flagInitForce   bool
 )
 
 func init() {
@@ -113,7 +137,6 @@ func init() {
 	runCmd.Flags().BoolVar(&flagDebug, "debug", false, "Enable verbose debug output")
 	runCmd.Flags().StringVar(&flagResume, "resume", "auto", "Resume behavior: auto (default), true, false, or force")
 	runCmd.Flags().BoolVarP(&flagInteractive, "interactive", "i", false, "Prompt for human input on interactive questions (default: auto-answer)")
-	runCmd.Flags().BoolVarP(&flagForce, "force", "f", false, "Skip confirmation when ticket already has existing work")
 
 	// Only ticket is required - goal can come from multiple sources
 	_ = runCmd.MarkFlagRequired("ticket")
@@ -121,10 +144,15 @@ func init() {
 	// Validate command flags
 	validateCmd.Flags().StringVar(&flagConfigPath, "config", "", "Path to config file (default: orchestrator.json)")
 
+	// Init command flags
+	initCmd.Flags().BoolVar(&flagInitForce, "force", false, "Overwrite existing files")
+	initCmd.Flags().BoolVar(&flagDryRun, "dry-run", false, "Preview what would be written")
+
 	// Add commands
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(validateCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(initCmd)
 }
 
 // resolveGoal determines the goal from various input sources in priority order:
@@ -259,39 +287,6 @@ func readInteractiveStdin() (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-// confirmCollision prompts the user to confirm continuing with an existing ticket.
-// Returns true if the user confirms, false otherwise.
-// If stdin is not a terminal (piped input), returns true without prompting.
-func confirmCollision(ticket string, hasWorktree bool, hasState bool) bool {
-	// Check if stdin is a terminal
-	stat, _ := os.Stdin.Stat()
-	if (stat.Mode() & os.ModeCharDevice) == 0 {
-		// Non-interactive (piped input), skip confirmation
-		return true
-	}
-
-	warning := color.New(color.FgYellow).SprintFunc()
-	bold := color.New(color.Bold).SprintFunc()
-
-	fmt.Printf("\n%s Existing work found for ticket %s:\n", warning("WARNING"), bold(ticket))
-	if hasWorktree {
-		fmt.Printf("    - Worktree already exists\n")
-	}
-	if hasState {
-		fmt.Printf("    - Pipeline state already exists\n")
-	}
-	fmt.Printf("\nContinue? [y/N] ")
-
-	reader := bufio.NewReader(os.Stdin)
-	response, err := reader.ReadString('\n')
-	if err != nil {
-		return false
-	}
-
-	response = strings.TrimSpace(strings.ToLower(response))
-	return response == "y" || response == "yes"
-}
-
 func runRun(cmd *cobra.Command, args []string) error {
 	info := color.New(color.FgCyan).SprintFunc()
 	errColor := color.New(color.FgRed).SprintFunc()
@@ -348,25 +343,6 @@ func runRun(cmd *cobra.Command, args []string) error {
 	mgr, err := worktree.NewManager(cwd)
 	if err == nil {
 		worktreeExisted = mgr.Exists(flagTicket)
-	}
-
-	// Check if state already exists (indicates prior work)
-	stateExisted := false
-	potentialRunDir := runner.GetRunDir(cwd, flagTicket)
-	if worktreeExisted {
-		// If worktree exists, check state in the worktree
-		wtPath := mgr.WorktreePath(flagTicket)
-		potentialRunDir = runner.GetRunDir(wtPath, flagTicket)
-	}
-	existingState, _ := state.Load(potentialRunDir)
-	stateExisted = existingState != nil
-
-	// Confirm collision if ticket has existing work
-	if (worktreeExisted || stateExisted) && !flagForce {
-		if !confirmCollision(flagTicket, worktreeExisted, stateExisted) {
-			fmt.Printf("Aborted.\n")
-			return nil
-		}
 	}
 
 	fmt.Printf("%s Setting up worktree for ticket: %s\n", info(">>>"), flagTicket)
@@ -493,6 +469,74 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("\n%s Configuration is valid!\n", success("SUCCESS"))
+	return nil
+}
+
+func runInit(cmd *cobra.Command, args []string) error {
+	success := color.New(color.FgGreen).SprintFunc()
+	errColor := color.New(color.FgRed).SprintFunc()
+	warning := color.New(color.FgYellow).SprintFunc()
+	info := color.New(color.FgCyan).SprintFunc()
+	bold := color.New(color.Bold).SprintFunc()
+
+	// Get target directory (current directory)
+	targetDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("%s Failed to get current directory: %w", errColor("ERROR"), err)
+	}
+
+	// Validate target is a git repository
+	gitDir := filepath.Join(targetDir, ".git")
+	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
+		return fmt.Errorf("%s %s is not a git repository (no .git directory found)", errColor("ERROR"), targetDir)
+	}
+
+	fmt.Printf("%s Initializing fastflow in %s\n\n", info(">>>"), bold(targetDir))
+
+	opts := templates.WriteOptions{
+		Force:  flagInitForce,
+		DryRun: flagDryRun,
+	}
+
+	if flagDryRun {
+		fmt.Printf("%s Dry run mode - no files will be written\n\n", warning("NOTE"))
+	}
+
+	result, err := templates.Write(targetDir, opts)
+	if err != nil {
+		return fmt.Errorf("%s Failed to write templates: %w", errColor("ERROR"), err)
+	}
+
+	// Print results
+	if len(result.Created) > 0 {
+		fmt.Printf("%s Created %d files:\n", success("OK"), len(result.Created))
+		for _, f := range result.Created {
+			fmt.Printf("    %s\n", f)
+		}
+	}
+
+	if len(result.Overwritten) > 0 {
+		fmt.Printf("\n%s Overwritten %d files:\n", warning("OK"), len(result.Overwritten))
+		for _, f := range result.Overwritten {
+			fmt.Printf("    %s\n", f)
+		}
+	}
+
+	if len(result.Skipped) > 0 {
+		fmt.Printf("\n%s Skipped %d existing files (use --force to overwrite):\n", warning("SKIP"), len(result.Skipped))
+		for _, f := range result.Skipped {
+			fmt.Printf("    %s\n", f)
+		}
+	}
+
+	if !flagDryRun {
+		fmt.Printf("\n%s Fastflow initialized!\n", success("SUCCESS"))
+		fmt.Printf("\n%s Next steps:\n", info(">>>"))
+		fmt.Printf("    1. Review orchestrator.json and customize workflows\n")
+		fmt.Printf("    2. Run 'fastflow validate' to verify configuration\n")
+		fmt.Printf("    3. Run 'fastflow run --goal \"...\" --ticket TICKET-123'\n")
+	}
+
 	return nil
 }
 

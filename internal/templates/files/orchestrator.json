@@ -1,0 +1,64 @@
+{
+  "default_workflow": "full",
+  "judge_model": "haiku",
+  "default_judge_prompt": "Did this stage complete successfully? Look for clear evidence in the CLI output that the required work was done. Check for: 1) No obvious errors or failures, 2) The work aligns with the original goal. Respond with YES or NO followed by a brief explanation.",
+
+  "workflows": {
+    "full": {
+      "description": "Complete workflow: research → plan → implement → validate → commit",
+      "stages": ["research", "plan", "implement", "validate", "commit"]
+    },
+    "plan-first": {
+      "description": "Skip research, start with planning",
+      "stages": ["plan", "implement", "validate", "commit"]
+    },
+    "debug": {
+      "description": "Debug workflow for bug fixes",
+      "stages": ["debug", "implement", "validate", "commit"]
+    },
+    "quick": {
+      "description": "Quick workflow when plan already exists",
+      "stages": ["implement", "validate", "commit"]
+    }
+  },
+
+  "stages": {
+    "research": {
+      "prompt_file": ".claude/stages/research.md",
+      "model": "sonnet",
+      "requires": [],
+      "judge_prompt": "Did the research stage produce useful findings? Check the CLI output for: 1) A research document was written to thoughts/shared/research/, 2) It contains relevant code locations and patterns, 3) It identifies key files related to the goal."
+    },
+    "debug": {
+      "skill": "debug",
+      "model": "sonnet",
+      "requires": [".claude/commands/debug.md"],
+      "judge_prompt": "Did the debug stage identify the issue? Check the CLI output for: 1) Root cause analysis was performed, 2) A fix or next steps were proposed."
+    },
+    "plan": {
+      "prompt_file": ".claude/stages/plan.md",
+      "model": "opus",
+      "checkpoint": true,
+      "requires": [],
+      "judge_prompt": "Is the plan complete and actionable? Check the CLI output for: 1) A plan was written to thoughts/shared/plans/, 2) It has clear phases with specific changes, 3) It includes success criteria, 4) No open questions remain."
+    },
+    "implement": {
+      "prompt_file": ".claude/stages/implement.md",
+      "model": "sonnet",
+      "requires": [],
+      "judge_prompt": "Did implementation make progress? Check the CLI output for: 1) Code changes were made, 2) No critical errors occurred during implementation."
+    },
+    "validate": {
+      "prompt_file": ".claude/stages/validate.md",
+      "model": "sonnet",
+      "requires": [],
+      "judge_prompt": "Did validation pass? Check the CLI output for: 1) Tests were run, 2) Linting/type checking results, 3) Any failures documented with next steps."
+    },
+    "commit": {
+      "prompt_file": ".claude/stages/commit.md",
+      "model": "sonnet",
+      "requires": [],
+      "judge_prompt": "Was the commit/PR created? Check the CLI output for: 1) Changes were committed, 2) A PR was created if requested."
+    }
+  }
+}
