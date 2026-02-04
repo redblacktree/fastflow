@@ -19,8 +19,10 @@ type Config struct {
 
 // Workflow defines a named workflow as a sequence of stages.
 type Workflow struct {
-	Description string   `json:"description"`
-	Stages      []string `json:"stages"`
+	Description        string   `json:"description"`
+	Stages             []string `json:"stages"`
+	SkipGoal           bool     `json:"skip_goal,omitempty"`
+	IgnoreConfigChange bool     `json:"ignore_config_change,omitempty"`
 }
 
 // Stage defines a pipeline stage configuration.
