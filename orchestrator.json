@@ -19,6 +19,12 @@
     "quick": {
       "description": "Quick workflow when plan isn't needed",
       "stages": ["implement", "commit"]
+    },
+    "review": {
+      "description": "Address PR review feedback",
+      "stages": ["fetch-feedback", "implement", "commit"],
+      "skip_goal": true,
+      "ignore_config_change": true
     }
   },
 
@@ -59,6 +65,12 @@
       "model": "sonnet",
       "requires": [".claude/commands/ff_commit.md", ".claude/commands/ff_describe_pr.md"],
       "judge_prompt": "Was the commit/PR created? Check the CLI output for: 1) Changes were committed, 2) A PR was created if requested."
+    },
+    "fetch-feedback": {
+      "prompt_file": ".claude/stages/fetch-feedback.md",
+      "model": "sonnet",
+      "requires": [],
+      "judge_prompt": "Did the fetch-feedback stage gather PR feedback? Check for: 1) PR comments were fetched, 2) A goal.md was written with clear action items from the feedback."
     }
   }
 }
