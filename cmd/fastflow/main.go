@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -158,6 +159,7 @@ var (
 	flagListPrefix  string
 	flagCleanPrefix string
 	flagCleanForce  bool
+	flagNoWorktree  bool
 )
 
 func init() {
@@ -172,6 +174,7 @@ func init() {
 	runCmd.Flags().BoolVar(&flagDebug, "debug", false, "Enable verbose debug output")
 	runCmd.Flags().StringVar(&flagResume, "resume", "auto", "Resume behavior: auto (default), true, false, or force")
 	runCmd.Flags().BoolVarP(&flagInteractive, "interactive", "i", false, "Prompt for human input on interactive questions (default: auto-answer)")
+	runCmd.Flags().BoolVar(&flagNoWorktree, "no-worktree", false, "Use current directory instead of creating worktree")
 
 	// Only ticket is required - goal can come from multiple sources
 	_ = runCmd.MarkFlagRequired("ticket")
@@ -383,22 +386,32 @@ func runRun(cmd *cobra.Command, args []string) error {
 	branchName := flagTicket
 	worktreeExisted := false
 
-	// Check if worktree already exists
-	mgr, err := worktree.NewManager(cwd)
-	if err == nil {
-		worktreeExisted = mgr.Exists(flagTicket)
-	}
-
-	fmt.Printf("%s Setting up worktree for ticket: %s\n", info(">>>"), flagTicket)
-	wtPath, err := runner.SetupWorktree(flagTicket)
-	if err != nil {
-		fmt.Printf("    Note: Using current directory (worktree creation failed: %v)\n", err)
+	if flagNoWorktree {
+		// User explicitly requested no worktree
+		fmt.Printf("%s Using current directory (--no-worktree)\n", info(">>>"))
+		// Get current branch name for context
+		branchName = getCurrentBranch(cwd)
+		if branchName == "" {
+			branchName = flagTicket
+		}
 	} else {
-		workDir = wtPath
-		if worktreeExisted {
-			fmt.Printf("    Worktree: %s (existing)\n", workDir)
+		// Check if worktree already exists
+		mgr, err := worktree.NewManager(cwd)
+		if err == nil {
+			worktreeExisted = mgr.Exists(flagTicket)
+		}
+
+		fmt.Printf("%s Setting up worktree for ticket: %s\n", info(">>>"), flagTicket)
+		wtPath, err := runner.SetupWorktree(flagTicket)
+		if err != nil {
+			fmt.Printf("    Note: Using current directory (worktree creation failed: %v)\n", err)
 		} else {
-			fmt.Printf("    Worktree: %s (created)\n", workDir)
+			workDir = wtPath
+			if worktreeExisted {
+				fmt.Printf("    Worktree: %s (existing)\n", workDir)
+			} else {
+				fmt.Printf("    Worktree: %s (created)\n", workDir)
+			}
 		}
 	}
 
@@ -506,7 +519,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 
 	// Check for claude CLI
 	fmt.Printf("\n%s Checking runtime dependencies...\n", bold(""))
-	if _, err := exec("which", "claude"); err != nil {
+	if _, err := findExecutable("which", "claude"); err != nil {
 		fmt.Printf("%s Claude CLI not found in PATH\n", warning("WARN"))
 	} else {
 		fmt.Printf("%s Claude CLI found\n", success("OK"))
@@ -584,8 +597,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// exec is a helper to run a command and check if it exists.
-func exec(name string, args ...string) (string, error) {
+// findExecutable is a helper to run a command and check if it exists.
+func findExecutable(name string, args ...string) (string, error) {
 	path, err := os.Executable()
 	if err != nil {
 		return "", err
@@ -788,4 +801,15 @@ func runClean(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 
 	return nil
+}
+
+// getCurrentBranch returns the current git branch name.
+func getCurrentBranch(dir string) string {
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = dir
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
 }
