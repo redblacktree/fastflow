@@ -12,24 +12,21 @@ Goal → Worktree → Research → Plan → Implement → Validate → Commit/PR
 
 Each stage communicates via markdown files in `thoughts/`, enabling clean handoffs between agent contexts.
 
+## Prerequisites
+
+- [Claude Code](https://claude.ai/claude-code) CLI installed and authenticated
+
 ## Installation
 
-```bash
-go install github.com/dustinrasener/fastflow/cmd/fastflow@latest
-```
+Download the latest release from the [releases page](https://github.com/redblacktree/fastflow/releases).
 
-Or build from source:
+Or build from source (requires Go 1.21+):
 
 ```bash
-git clone https://github.com/dustinrasener/fastflow.git
+git clone https://github.com/redblacktree/fastflow.git
 cd fastflow
 go build -o fastflow ./cmd/fastflow
 ```
-
-## Prerequisites
-
-- Go 1.25.5+
-- [Claude Code](https://claude.ai/claude-code) CLI installed and authenticated
 
 ## Usage
 
@@ -71,6 +68,10 @@ fastflow uses `orchestrator.json` for workflow configuration. See the included c
 - Configuring stage models (sonnet, opus, haiku)
 - Setting up checkpoints for human review
 - Custom judge prompts for stage validation
+
+## Acknowledgements
+
+The workflow prompts and orchestration patterns in this project were inspired by [HumanLayer](https://github.com/humanlayer/humanlayer).
 
 ## License
 
