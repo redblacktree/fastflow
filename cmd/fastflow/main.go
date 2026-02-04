@@ -110,6 +110,38 @@ Examples:
 	RunE: runInit,
 }
 
+var listCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List worktrees and tickets",
+	Long: `List all worktrees for the current repository with their ticket summaries.
+
+Examples:
+  # List all worktrees
+  fastflow list
+
+  # List only tickets matching a prefix
+  fastflow list --prefix FAS-
+  fastflow list --prefix ENG-`,
+	RunE: runList,
+}
+
+var cleanCmd = &cobra.Command{
+	Use:   "clean [ticket]",
+	Short: "Remove worktrees",
+	Long: `Remove git worktrees for completed tickets.
+
+Examples:
+  # Remove a specific worktree
+  fastflow clean FAS-001
+
+  # Remove all worktrees matching a prefix (requires confirmation)
+  fastflow clean --prefix FAS-
+
+  # Remove without confirmation
+  fastflow clean --prefix FAS- --force`,
+	RunE: runClean,
+}
+
 // Flags
 var (
 	flagGoal        string
@@ -123,6 +155,9 @@ var (
 	flagResume      string
 	flagInteractive bool
 	flagInitForce   bool
+	flagListPrefix  string
+	flagCleanPrefix string
+	flagCleanForce  bool
 )
 
 func init() {
@@ -148,11 +183,20 @@ func init() {
 	initCmd.Flags().BoolVar(&flagInitForce, "force", false, "Overwrite existing files")
 	initCmd.Flags().BoolVar(&flagDryRun, "dry-run", false, "Preview what would be written")
 
+	// List command flags
+	listCmd.Flags().StringVar(&flagListPrefix, "prefix", "", "Filter tickets by prefix (e.g., FAS-, ENG-)")
+
+	// Clean command flags
+	cleanCmd.Flags().StringVar(&flagCleanPrefix, "prefix", "", "Clean all worktrees matching prefix")
+	cleanCmd.Flags().BoolVar(&flagCleanForce, "force", false, "Skip confirmation prompt")
+
 	// Add commands
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(validateCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(initCmd)
+	rootCmd.AddCommand(listCmd)
+	rootCmd.AddCommand(cleanCmd)
 }
 
 // resolveGoal determines the goal from various input sources in priority order:
@@ -559,4 +603,189 @@ func exec(name string, args ...string) (string, error) {
 		return "/usr/local/bin/" + name, nil
 	}
 	return "", fmt.Errorf("command not found: %s", name)
+}
+
+func runList(cmd *cobra.Command, args []string) error {
+	bold := color.New(color.Bold).SprintFunc()
+	dim := color.New(color.Faint).SprintFunc()
+
+	// Get current working directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get working directory: %w", err)
+	}
+
+	// Create worktree manager
+	mgr, err := worktree.NewManager(cwd)
+	if err != nil {
+		return fmt.Errorf("failed to create worktree manager: %w", err)
+	}
+
+	// List worktrees
+	worktrees, err := mgr.List()
+	if err != nil {
+		return fmt.Errorf("failed to list worktrees: %w", err)
+	}
+
+	// Filter by prefix if specified
+	if flagListPrefix != "" {
+		var filtered []worktree.WorktreeInfo
+		for _, wt := range worktrees {
+			if strings.HasPrefix(wt.Ticket, flagListPrefix) {
+				filtered = append(filtered, wt)
+			}
+		}
+		worktrees = filtered
+	}
+
+	if len(worktrees) == 0 {
+		if flagListPrefix != "" {
+			fmt.Printf("No worktrees found matching prefix: %s\n", flagListPrefix)
+		} else {
+			fmt.Printf("No worktrees found for repository: %s\n", mgr.RepoName)
+		}
+		return nil
+	}
+
+	// Print header
+	fmt.Printf("%s  %s  %s  %s\n",
+		bold(fmt.Sprintf("%-12s", "Ticket")),
+		bold(fmt.Sprintf("%-10s", "Status")),
+		bold(fmt.Sprintf("%-20s", "Created")),
+		bold("Summary"))
+	fmt.Printf("%s  %s  %s  %s\n",
+		strings.Repeat("─", 12),
+		strings.Repeat("─", 10),
+		strings.Repeat("─", 20),
+		strings.Repeat("─", 40))
+
+	// Print each worktree
+	for _, wt := range worktrees {
+		status := "active"
+		if wt.IsOrphan {
+			status = "orphaned"
+		}
+
+		// Try to get ticket info from goal file
+		created := ""
+		summary := dim("(no goal file)")
+
+		// Check multiple possible locations for goal file
+		goalLocations := []string{
+			wt.Path, // Check in the worktree itself
+			cwd,     // Check in current directory
+		}
+
+		for _, loc := range goalLocations {
+			if info := worktree.ReadTicketInfo(loc, wt.Ticket); info != nil {
+				if info.Created != "" {
+					// Parse and format the timestamp
+					created = info.Created
+					if len(created) > 19 {
+						created = created[:19] // Trim timezone for display
+					}
+					created = strings.Replace(created, "T", " ", 1)
+				}
+				if info.Goal != "" {
+					summary = info.Goal
+					if len(summary) > 40 {
+						summary = summary[:37] + "..."
+					}
+				}
+				break
+			}
+		}
+
+		fmt.Printf("%-12s  %-10s  %-20s  %s\n", wt.Ticket, status, created, summary)
+	}
+
+	fmt.Printf("\n%d worktree(s) found\n", len(worktrees))
+	return nil
+}
+
+func runClean(cmd *cobra.Command, args []string) error {
+	success := color.New(color.FgGreen).SprintFunc()
+	errColor := color.New(color.FgRed).SprintFunc()
+	warning := color.New(color.FgYellow).SprintFunc()
+
+	// Get current working directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get working directory: %w", err)
+	}
+
+	// Create worktree manager
+	mgr, err := worktree.NewManager(cwd)
+	if err != nil {
+		return fmt.Errorf("failed to create worktree manager: %w", err)
+	}
+
+	// Determine what to clean
+	var toClean []worktree.WorktreeInfo
+
+	if len(args) > 0 {
+		// Clean specific ticket
+		ticket := args[0]
+		if !mgr.Exists(ticket) {
+			return fmt.Errorf("worktree not found: %s", ticket)
+		}
+		toClean = append(toClean, worktree.WorktreeInfo{
+			Ticket: ticket,
+			Path:   mgr.WorktreePath(ticket),
+		})
+	} else if flagCleanPrefix != "" {
+		// Clean by prefix
+		worktrees, err := mgr.List()
+		if err != nil {
+			return fmt.Errorf("failed to list worktrees: %w", err)
+		}
+		for _, wt := range worktrees {
+			if strings.HasPrefix(wt.Ticket, flagCleanPrefix) {
+				toClean = append(toClean, wt)
+			}
+		}
+		if len(toClean) == 0 {
+			fmt.Printf("No worktrees found matching prefix: %s\n", flagCleanPrefix)
+			return nil
+		}
+	} else {
+		return fmt.Errorf("specify a ticket or use --prefix to select worktrees to clean")
+	}
+
+	// Confirm if not forced
+	if !flagCleanForce && len(toClean) > 0 {
+		fmt.Printf("%s The following worktrees will be removed:\n", warning("WARNING"))
+		for _, wt := range toClean {
+			fmt.Printf("  - %s (%s)\n", wt.Ticket, wt.Path)
+		}
+		fmt.Printf("\nProceed? [y/N]: ")
+
+		reader := bufio.NewReader(os.Stdin)
+		response, _ := reader.ReadString('\n')
+		response = strings.TrimSpace(strings.ToLower(response))
+		if response != "y" && response != "yes" {
+			fmt.Println("Aborted.")
+			return nil
+		}
+	}
+
+	// Remove worktrees
+	var removed, failed int
+	for _, wt := range toClean {
+		if err := mgr.Remove(wt.Ticket); err != nil {
+			fmt.Printf("%s Failed to remove %s: %v\n", errColor("ERROR"), wt.Ticket, err)
+			failed++
+		} else {
+			fmt.Printf("%s Removed %s\n", success("OK"), wt.Ticket)
+			removed++
+		}
+	}
+
+	fmt.Printf("\n%d worktree(s) removed", removed)
+	if failed > 0 {
+		fmt.Printf(", %d failed", failed)
+	}
+	fmt.Println()
+
+	return nil
 }
