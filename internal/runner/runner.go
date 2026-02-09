@@ -27,6 +27,7 @@ type Runner struct {
 	NoReview       bool
 	DryRun         bool
 	Debug          bool
+	Verbose        bool
 	Resume         string // "auto", "true", "false", or "force"
 	// MaxResumptions is the maximum number of handoff/resume cycles per stage (default: 3).
 	MaxResumptions int
@@ -311,6 +312,7 @@ func (r *Runner) clearRunDirectory(runDir string) error {
 func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.Stage) (*InvokeResult, error) {
 	invoker := NewClaudeInvoker(ctx.WorkDir)
 	invoker.Debug = r.Debug
+	invoker.Verbose = r.Verbose
 
 	model := stage.Model
 	if model == "" {
@@ -527,6 +529,7 @@ func GetRunDir(workDir, ticket string) string {
 func (r *Runner) selfAnswer(ctx *RunContext, stageName string, stage *config.Stage, previousResult *InvokeResult, question string) (*InvokeResult, error) {
 	invoker := NewClaudeInvoker(ctx.WorkDir)
 	invoker.Debug = r.Debug
+	invoker.Verbose = r.Verbose
 
 	model := stage.Model
 	if model == "" {
@@ -609,6 +612,7 @@ func (r *Runner) promptHumanForAnswer(question string) (string, error) {
 func (r *Runner) continueWithAnswer(ctx *RunContext, stageName string, stage *config.Stage, previousResult *InvokeResult, question string, answer string) (*InvokeResult, error) {
 	invoker := NewClaudeInvoker(ctx.WorkDir)
 	invoker.Debug = r.Debug
+	invoker.Verbose = r.Verbose
 
 	model := stage.Model
 	if model == "" {

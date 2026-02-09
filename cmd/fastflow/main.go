@@ -160,6 +160,7 @@ var (
 	flagCleanPrefix string
 	flagCleanForce  bool
 	flagNoWorktree  bool
+	flagVerbose     bool
 )
 
 func init() {
@@ -175,6 +176,7 @@ func init() {
 	runCmd.Flags().StringVar(&flagResume, "resume", "auto", "Resume behavior: auto (default), true, false, or force")
 	runCmd.Flags().BoolVarP(&flagInteractive, "interactive", "i", false, "Prompt for human input on interactive questions (default: auto-answer)")
 	runCmd.Flags().BoolVar(&flagNoWorktree, "no-worktree", false, "Use current directory instead of creating worktree")
+	runCmd.Flags().BoolVar(&flagVerbose, "verbose", false, "Show tool activity during stage execution")
 
 	// Only ticket is required - goal can come from multiple sources
 	_ = runCmd.MarkFlagRequired("ticket")
@@ -439,6 +441,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	r.Debug = flagDebug
 	r.Resume = resumeMode
 	r.Interactive = flagInteractive
+	r.Verbose = flagVerbose
 
 	return r.Run(ctx)
 }

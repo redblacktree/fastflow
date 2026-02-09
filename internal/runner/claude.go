@@ -20,6 +20,8 @@ type ClaudeInvoker struct {
 	SkipPermissions bool
 	// Debug enables verbose output logging.
 	Debug bool
+	// Verbose enables stream-json output to show tool activity.
+	Verbose bool
 }
 
 // NewClaudeInvoker creates a new Claude invoker with default settings.
@@ -42,8 +44,13 @@ type InvokeResult struct {
 func (c *ClaudeInvoker) Invoke(prompt string, model string) (*InvokeResult, error) {
 	args := []string{
 		"--model", model,
-		"--print",
 		"--max-turns", fmt.Sprintf("%d", c.MaxTurns),
+	}
+
+	if c.Verbose {
+		args = append(args, "--output-format", "stream-json", "--verbose")
+	} else {
+		args = append(args, "--print")
 	}
 
 	if c.SkipPermissions {
@@ -61,7 +68,11 @@ func (c *ClaudeInvoker) Invoke(prompt string, model string) (*InvokeResult, erro
 	cmd := exec.Command("claude", args...)
 	cmd.Dir = c.WorkDir
 
-	// Capture output while also streaming to stdout
+	if c.Verbose {
+		return c.runWithStreamParsing(cmd)
+	}
+
+	// Existing --print path: capture output while also streaming to stdout
 	var outputBuf bytes.Buffer
 	multiWriter := io.MultiWriter(os.Stdout, &outputBuf)
 
