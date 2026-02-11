@@ -18,6 +18,7 @@ import (
 
 const (
 	maxInteractionAttempts = 3
+	maxEvalRetries         = 2
 )
 
 // Runner orchestrates the execution of pipeline stages.
@@ -192,8 +193,30 @@ func (r *Runner) Run(ctx *RunContext) error {
 				stageName, maxInteractionAttempts, judgeResult.Reasoning)
 		}
 
-		if !judgeResult.Success {
+		// Handle evaluation failure with automatic retry
+		evalRetries := 0
+		for !judgeResult.Success && evalRetries < maxEvalRetries {
+			evalRetries++
 			fmt.Printf("    %s Stage did not pass evaluation\n", errColor("FAILED"))
+			fmt.Printf("    Reason: %s\n", judgeResult.Reasoning)
+			fmt.Printf("    %s Retrying stage with feedback (%d/%d)...\n",
+				warning("RETRY"), evalRetries, maxEvalRetries)
+
+			result, err = r.retryWithFeedback(ctx, stageName, stage, result, judgeResult.Reasoning)
+			if err != nil {
+				fmt.Printf("    %s Retry failed: %v\n", errColor("ERROR"), err)
+				return err
+			}
+
+			judgeResult, err = r.evaluateStage(ctx, stageName, stage, result)
+			if err != nil {
+				fmt.Printf("    %s Judge evaluation failed: %v\n", errColor("ERROR"), err)
+				return err
+			}
+		}
+
+		if !judgeResult.Success {
+			fmt.Printf("    %s Stage did not pass evaluation after %d retries\n", errColor("FAILED"), maxEvalRetries)
 			fmt.Printf("    Reason: %s\n", judgeResult.Reasoning)
 			return fmt.Errorf("stage %s failed evaluation: %s", stageName, judgeResult.Reasoning)
 		}
@@ -557,6 +580,47 @@ Based on the original goal and context above, answer your own question and conti
 Do NOT ask for further clarification. Make a decision and proceed with the implementation.
 `, ctx.Goal, ctx.Ticket, question, truncateForContext(previousResult.Output, 5000))
 
+	return invoker.Invoke(prompt, model)
+}
+
+// retryWithFeedback re-invokes a stage with evaluation feedback so it can fix its output.
+func (r *Runner) retryWithFeedback(ctx *RunContext, stageName string, stage *config.Stage, previousResult *InvokeResult, evalFeedback string) (*InvokeResult, error) {
+	invoker := NewClaudeInvoker(ctx.WorkDir)
+	invoker.Debug = r.Debug
+	invoker.Verbose = r.Verbose
+
+	model := stage.Model
+	if model == "" {
+		model = "sonnet"
+	}
+
+	judgePrompt := stage.JudgePrompt
+	if judgePrompt == "" {
+		judgePrompt = r.Config.DefaultJudgePrompt
+	}
+
+	prompt := fmt.Sprintf(`Your previous attempt at the "%s" stage did not pass evaluation. You need to fix the issues and try again.
+
+**Original Goal**: %s
+**Ticket**: %s
+
+**Evaluation Criteria**:
+%s
+
+**Why Your Previous Attempt Failed**:
+%s
+
+**Your Previous Output** (for context):
+%s
+
+---
+
+Fix the issues identified in the evaluation feedback above. Make sure your output fully satisfies all the evaluation criteria. Do NOT ask for clarification — just fix the issues and complete the stage.
+`, stageName, ctx.Goal, ctx.Ticket, judgePrompt, evalFeedback, truncateForContext(previousResult.Output, 5000))
+
+	if stage.Skill != "" {
+		return invoker.InvokeWithSkill(stage.Skill, model, prompt)
+	}
 	return invoker.Invoke(prompt, model)
 }
 
