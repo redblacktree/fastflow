@@ -18,7 +18,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "0.1.0"
+var version = "0.2.1"
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
@@ -27,8 +27,9 @@ func main() {
 }
 
 var rootCmd = &cobra.Command{
-	Use:   "fastflow",
-	Short: "Orchestrate multi-agent development workflows",
+	Use:     "fastflow",
+	Short:   "Orchestrate multi-agent development workflows",
+	Version: version,
 	Long: `fastflow automates the full development workflow:
 Goal → Worktree → Research → Plan → Implement → Validate → Commit/PR
 
@@ -77,14 +78,6 @@ var validateCmd = &cobra.Command{
 	Long: `Validate the orchestrator configuration file and check that all
 required dependencies (prompt files, commands) exist.`,
 	RunE: runValidate,
-}
-
-var versionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Print version information",
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("fastflow version %s\n", version)
-	},
 }
 
 var initCmd = &cobra.Command{
@@ -198,7 +191,6 @@ func init() {
 	// Add commands
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(validateCmd)
-	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(cleanCmd)
