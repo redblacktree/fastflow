@@ -60,7 +60,12 @@ func (m *Manager) Create(ticket string) (string, error) {
 
 	// Check if worktree already exists
 	if _, err := os.Stat(wtPath); err == nil {
-		return wtPath, nil // Already exists
+		// Check if existing worktree has conflicts
+		hasConflicts, _ := m.HasConflicts(wtPath)
+		if hasConflicts {
+			return wtPath, &ConflictError{Path: wtPath, Message: "existing worktree has conflicts"}
+		}
+		return wtPath, nil // Already exists and clean
 	}
 
 	// Get the main branch name
@@ -91,7 +96,29 @@ func (m *Manager) Create(ticket string) (string, error) {
 	}
 	_ = output // Used for error message if needed
 
+	// Check if the new worktree has conflicts (e.g., if branch already existed with conflicts)
+	hasConflicts, _ := m.HasConflicts(wtPath)
+	if hasConflicts {
+		return wtPath, &ConflictError{Path: wtPath, Message: "new worktree has conflicts"}
+	}
+
 	return wtPath, nil
+}
+
+// ConflictError is returned when a worktree has conflicts.
+type ConflictError struct {
+	Path    string
+	Message string
+}
+
+func (e *ConflictError) Error() string {
+	return fmt.Sprintf("conflict error: %s (path: %s)", e.Message, e.Path)
+}
+
+// IsConflictError returns true if the error is a ConflictError.
+func IsConflictError(err error) bool {
+	_, ok := err.(*ConflictError)
+	return ok
 }
 
 // Remove removes a worktree for the given ticket.
@@ -312,4 +339,169 @@ func expandPath(path string) string {
 		return filepath.Join(home, path[2:])
 	}
 	return path
+}
+
+// ConflictInfo contains information about a git conflict.
+type ConflictInfo struct {
+	Path   string // File path with conflict
+	Status string // Conflict status (UU, AA, DD, etc.)
+}
+
+// HasConflicts checks if there are any merge/rebase conflicts in the worktree.
+func (m *Manager) HasConflicts(workDir string) (bool, error) {
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = workDir
+	output, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("failed to check status: %w", err)
+	}
+
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if len(line) >= 2 {
+			status := line[:2]
+			// UU = both modified, AA = both added, DD = both deleted, etc.
+			if status == "UU" || status == "AA" || status == "DD" ||
+				status == "AU" || status == "UA" || status == "DU" || status == "UD" {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// GetConflicts returns a list of all conflicted files.
+func (m *Manager) GetConflicts(workDir string) ([]ConflictInfo, error) {
+	cmd := exec.Command("git", "diff", "--name-only", "--diff-filter=U")
+	cmd.Dir = workDir
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get conflicted files: %w", err)
+	}
+
+	var conflicts []ConflictInfo
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			conflicts = append(conflicts, ConflictInfo{
+				Path:   line,
+				Status: "UU", // Both modified (most common)
+			})
+		}
+	}
+	return conflicts, nil
+}
+
+// GetConflictStatus returns the current git operation in progress (merge, rebase, or none).
+func (m *Manager) GetConflictStatus(workDir string) string {
+	// Check for merge in progress
+	mergeHead := filepath.Join(workDir, ".git", "MERGE_HEAD")
+	if _, err := os.Stat(mergeHead); err == nil {
+		return "merge"
+	}
+
+	// Check for rebase in progress
+	rebaseMerge := filepath.Join(workDir, ".git", "rebase-merge")
+	rebaseApply := filepath.Join(workDir, ".git", "rebase-apply")
+	if _, err := os.Stat(rebaseMerge); err == nil {
+		return "rebase"
+	}
+	if _, err := os.Stat(rebaseApply); err == nil {
+		return "rebase"
+	}
+
+	return "none"
+}
+
+// SyncWithMain syncs the worktree with the main branch, handling conflicts.
+// Returns true if sync was successful without conflicts, false if conflicts need resolution.
+func (m *Manager) SyncWithMain(workDir string) (bool, error) {
+	mainBranch, err := m.getMainBranch()
+	if err != nil {
+		return false, err
+	}
+
+	// Fetch latest changes
+	cmd := exec.Command("git", "fetch", "origin", mainBranch)
+	cmd.Dir = workDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("failed to fetch main: %s\n%w", string(output), err)
+	}
+
+	// Try to rebase onto main
+	cmd = exec.Command("git", "rebase", "origin/"+mainBranch)
+	cmd.Dir = workDir
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		// Check if it's a conflict
+		hasConflicts, _ := m.HasConflicts(workDir)
+		if hasConflicts {
+			return false, nil // Conflicts detected, needs resolution
+		}
+		return false, fmt.Errorf("rebase failed: %s\n%w", string(output), err)
+	}
+
+	return true, nil
+}
+
+// ResolveConflict marks a file as resolved.
+func (m *Manager) ResolveConflict(workDir, filePath string) error {
+	cmd := exec.Command("git", "add", filePath)
+	cmd.Dir = workDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to stage resolved file: %s\n%w", string(output), err)
+	}
+	return nil
+}
+
+// CompleteMerge completes a merge operation.
+func (m *Manager) CompleteMerge(workDir, message string) error {
+	cmd := exec.Command("git", "commit", "-m", message)
+	cmd.Dir = workDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to complete merge: %s\n%w", string(output), err)
+	}
+	return nil
+}
+
+// CompleteRebase continues a rebase operation.
+func (m *Manager) CompleteRebase(workDir string) error {
+	cmd := exec.Command("git", "rebase", "--continue")
+	cmd.Dir = workDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		// Check if there are still conflicts
+		hasConflicts, _ := m.HasConflicts(workDir)
+		if hasConflicts {
+			return fmt.Errorf("rebase still has conflicts: %s", string(output))
+		}
+		// Might be nothing to commit, try skip
+		cmd = exec.Command("git", "rebase", "--skip")
+		cmd.Dir = workDir
+		if output2, err2 := cmd.CombinedOutput(); err2 != nil {
+			return fmt.Errorf("failed to continue rebase: %s\n%s", string(output), string(output2))
+		}
+	}
+	return nil
+}
+
+// AbortMerge aborts the current merge operation.
+func (m *Manager) AbortMerge(workDir string) error {
+	cmd := exec.Command("git", "merge", "--abort")
+	cmd.Dir = workDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to abort merge: %s\n%w", string(output), err)
+	}
+	return nil
+}
+
+// AbortRebase aborts the current rebase operation.
+func (m *Manager) AbortRebase(workDir string) error {
+	cmd := exec.Command("git", "rebase", "--abort")
+	cmd.Dir = workDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to abort rebase: %s\n%w", string(output), err)
+	}
+	return nil
 }
