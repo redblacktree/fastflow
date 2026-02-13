@@ -1,0 +1,105 @@
+name: Release on PR Merge
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  create-release:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get latest tag
+        id: get_latest_tag
+        run: |
+          # Get the latest tag, default to v0.0.0 if none exist
+          latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "latest_tag=$latest_tag" >> $GITHUB_OUTPUT
+          echo "Latest tag: $latest_tag"
+
+      - name: Calculate next version
+        id: calc_version
+        run: |
+          latest_tag="${{ steps.get_latest_tag.outputs.latest_tag }}"
+          
+          # Parse version components (remove 'v' prefix)
+          version="${latest_tag#v}"
+          major=$(echo "$version" | cut -d. -f1)
+          minor=$(echo "$version" | cut -d. -f2)
+          patch=$(echo "$version" | cut -d. -f3)
+          
+          # Auto-increment patch version
+          patch=$((patch + 1))
+          
+          new_version="v${major}.${minor}.${patch}"
+          echo "new_version=$new_version" >> $GITHUB_OUTPUT
+          echo "Next version: $new_version"
+
+      - name: Generate release notes
+        id: gen_notes
+        run: |
+          pr_title="${{ github.event.pull_request.title }}"
+          pr_body="${{ github.event.pull_request.body }}"
+          pr_number="${{ github.event.pull_request.number }}"
+          pr_author="${{ github.event.pull_request.user.login }}"
+          
+          # Create release notes file
+          cat > release_notes.md << EOF
+          ## What's Changed
+          
+          ### PR #$pr_number: $pr_title
+          
+          **Author:** @$pr_author
+          
+          ---
+          
+          $pr_body
+          
+          ---
+          
+          **Full Changelog:** https://github.com/${{ github.repository }}/compare/${{ steps.get_latest_tag.outputs.latest_tag }}...${{ steps.calc_version.outputs.new_version }}
+          EOF
+          
+          echo "Release notes created"
+
+      - name: Create and push new tag
+        run: |
+          new_version="${{ steps.calc_version.outputs.new_version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$new_version" -m "Release $new_version"
+          git push origin "$new_version"
+          echo "Created and pushed tag: $new_version"
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          new_version="${{ steps.calc_version.outputs.new_version }}"
+          
+          # Create the release using gh CLI
+          gh release create "$new_version" \
+            --title "Release $new_version" \
+            --notes-file release_notes.md \
+            --generate-notes
+          
+          echo "Created release: $new_version"
+
+      - name: Summary
+        run: |
+          echo "✅ Release created successfully!"
+          echo "Version: ${{ steps.calc_version.outputs.new_version }}"
+          echo "PR: #${{ github.event.pull_request.number }} - ${{ github.event.pull_request.title }}"
