@@ -26,9 +26,16 @@
       "skip_goal": true,
       "ignore_config_change": true
     },
+    "review-with-replies": {
+      "description": "Address PR review feedback and reply to comments",
+      "stages": ["fetch-feedback", "implement", "reply-to-comments", "commit"],
+      "skip_goal": true,
+      "ignore_config_change": true
+    },
     "merge-conflict": {
       "description": "Resolve merge or rebase conflicts",
-      "stages": ["merge-conflict"]
+      "stages": ["merge-conflict"],
+      "skip_goal": true
     }
   },
 
@@ -81,6 +88,12 @@
       "model": "sonnet",
       "requires": [".claude/commands/ff_resolve_conflicts.md"],
       "judge_prompt": "Did the merge conflict resolution complete? Check the CLI output for: 1) Conflicts were detected and listed, 2) Resolutions were applied, 3) The merge/rebase was completed or the branch was clean."
+    },
+    "reply-to-comments": {
+      "prompt_file": ".claude/stages/reply-to-comments.md",
+      "model": "sonnet",
+      "requires": [".claude/commands/ff_reply_to_comments.md"],
+      "judge_prompt": "Did the reply-to-comments stage complete? Check the CLI output for: 1) PR comments were identified, 2) Replies were posted to addressed comments, 3) A summary of replies was provided."
     }
   }
 }
