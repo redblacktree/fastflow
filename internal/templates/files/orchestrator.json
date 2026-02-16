@@ -25,6 +25,10 @@
       "stages": ["fetch-feedback", "implement", "commit"],
       "skip_goal": true,
       "ignore_config_change": true
+    },
+    "merge-conflict": {
+      "description": "Resolve merge or rebase conflicts",
+      "stages": ["merge-conflict"]
     }
   },
 
@@ -71,6 +75,12 @@
       "model": "sonnet",
       "requires": [],
       "judge_prompt": "Did the fetch-feedback stage gather PR feedback? Check for: 1) PR comments were fetched, 2) A goal.md was written with clear action items from the feedback."
+    },
+    "merge-conflict": {
+      "prompt_file": ".claude/stages/merge-conflict.md",
+      "model": "sonnet",
+      "requires": [".claude/commands/ff_resolve_conflicts.md"],
+      "judge_prompt": "Did the merge conflict resolution complete? Check the CLI output for: 1) Conflicts were detected and listed, 2) Resolutions were applied, 3) The merge/rebase was completed or the branch was clean."
     }
   }
 }

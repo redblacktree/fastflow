@@ -153,6 +153,7 @@ var (
 	flagCleanPrefix string
 	flagCleanForce  bool
 	flagNoWorktree  bool
+	flagNoFetch     bool
 	flagVerbose     bool
 )
 
@@ -169,6 +170,7 @@ func init() {
 	runCmd.Flags().StringVar(&flagResume, "resume", "auto", "Resume behavior: auto (default), true, false, or force")
 	runCmd.Flags().BoolVarP(&flagInteractive, "interactive", "i", false, "Prompt for human input on interactive questions (default: auto-answer)")
 	runCmd.Flags().BoolVar(&flagNoWorktree, "no-worktree", false, "Use current directory instead of creating worktree")
+	runCmd.Flags().BoolVar(&flagNoFetch, "no-fetch", false, "Skip fetching main branch from origin before creating worktree")
 	runCmd.Flags().BoolVar(&flagVerbose, "verbose", false, "Show tool activity during stage execution")
 
 	// Only ticket is required - goal can come from multiple sources
@@ -389,19 +391,23 @@ func runRun(cmd *cobra.Command, args []string) error {
 			branchName = flagTicket
 		}
 	} else {
-		// Check if worktree already exists
+		// Build setup options
 		mgr, err := worktree.NewManager(cwd)
-		if err == nil {
-			worktreeExisted = mgr.Exists(flagTicket)
+		opts := runner.SetupWorktreeOpts{
+			NoFetch: flagNoFetch,
+		}
+		if err == nil && !mgr.Exists(flagTicket) {
+			opts.AfterCreate = runner.DefaultPostCreateHooks(mgr.RepoName)
 		}
 
 		fmt.Printf("%s Setting up worktree for ticket: %s\n", info(">>>"), flagTicket)
-		wtPath, err := runner.SetupWorktree(flagTicket)
+		wtPath, existed, err := runner.SetupWorktree(flagTicket, opts)
 		if err != nil {
 			fmt.Printf("    Note: Using current directory (worktree creation failed: %v)\n", err)
 		} else {
 			workDir = wtPath
-			if worktreeExisted {
+			worktreeExisted = existed
+			if existed {
 				fmt.Printf("    Worktree: %s (existing)\n", workDir)
 			} else {
 				fmt.Printf("    Worktree: %s (created)\n", workDir)

@@ -22,6 +22,9 @@ type Manager struct {
 	RepoName string
 	// RepoPath is the path to the main repository.
 	RepoPath string
+	// FetchBeforeCreate controls whether to fetch the main branch from origin
+	// before creating a new worktree. Default is true.
+	FetchBeforeCreate bool
 }
 
 // NewManager creates a new worktree manager.
@@ -35,9 +38,10 @@ func NewManager(repoPath string) (*Manager, error) {
 	baseDir := expandPath(DefaultWorktreeBase)
 
 	return &Manager{
-		BaseDir:  baseDir,
-		RepoName: repoName,
-		RepoPath: repoPath,
+		BaseDir:           baseDir,
+		RepoName:          repoName,
+		RepoPath:          repoPath,
+		FetchBeforeCreate: true,
 	}, nil
 }
 
@@ -74,6 +78,16 @@ func (m *Manager) Create(ticket string) (string, error) {
 		return "", fmt.Errorf("failed to determine main branch: %w", err)
 	}
 
+	// Fetch main branch from origin if enabled
+	startPoint := mainBranch
+	if m.FetchBeforeCreate {
+		if err := m.fetchMainBranch(mainBranch); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to fetch %s from origin: %v (using local branch)\n", mainBranch, err)
+		} else {
+			startPoint = "origin/" + mainBranch
+		}
+	}
+
 	// Ensure the base directory exists
 	baseDir := filepath.Dir(wtPath)
 	if err := os.MkdirAll(baseDir, 0755); err != nil {
@@ -82,7 +96,7 @@ func (m *Manager) Create(ticket string) (string, error) {
 
 	// Create the worktree with a new branch
 	branchName := ticket
-	cmd := exec.Command("git", "worktree", "add", "-b", branchName, wtPath, mainBranch)
+	cmd := exec.Command("git", "worktree", "add", "-b", branchName, wtPath, startPoint)
 	cmd.Dir = m.RepoPath
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -119,6 +133,17 @@ func (e *ConflictError) Error() string {
 func IsConflictError(err error) bool {
 	_, ok := err.(*ConflictError)
 	return ok
+}
+
+// fetchMainBranch fetches the main branch from origin.
+func (m *Manager) fetchMainBranch(mainBranch string) error {
+	cmd := exec.Command("git", "fetch", "origin", mainBranch)
+	cmd.Dir = m.RepoPath
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 // Remove removes a worktree for the given ticket.

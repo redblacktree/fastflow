@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -528,19 +529,77 @@ Run Directory: %s
 	return os.WriteFile(goalPath, []byte(content), 0644)
 }
 
+// SetupWorktreeOpts configures worktree creation behavior.
+type SetupWorktreeOpts struct {
+	// NoFetch disables fetching the main branch from origin before branching.
+	NoFetch bool
+	// AfterCreate hooks run after a new worktree is created. Each receives the worktree path.
+	AfterCreate []func(wtPath string) error
+	// BaseDir overrides the default worktree base directory (for testing).
+	BaseDir string
+}
+
 // SetupWorktree creates a worktree for the run if needed.
-func SetupWorktree(ticket string) (string, error) {
+// Returns the worktree path and whether it already existed.
+func SetupWorktree(ticket string, opts SetupWorktreeOpts) (string, bool, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	mgr, err := worktree.NewManager(cwd)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
-	return mgr.Create(ticket)
+	if opts.BaseDir != "" {
+		mgr.BaseDir = opts.BaseDir
+	}
+	mgr.FetchBeforeCreate = !opts.NoFetch
+	existed := mgr.Exists(ticket)
+
+	wtPath, err := mgr.Create(ticket)
+	if err != nil {
+		return "", false, err
+	}
+
+	// Run post-create hooks only on fresh creation
+	if !existed {
+		for _, hook := range opts.AfterCreate {
+			if err := hook(wtPath); err != nil {
+				return wtPath, false, fmt.Errorf("post-create hook failed: %w", err)
+			}
+		}
+	}
+
+	return wtPath, existed, nil
+}
+
+// DefaultPostCreateHooks returns the standard hooks to run after worktree creation.
+func DefaultPostCreateHooks(repoName string) []func(string) error {
+	return []func(string) error{
+		thoughtsInitHook(repoName),
+	}
+}
+
+// thoughtsInitHook returns a hook that runs `humanlayer thoughts init` in the worktree.
+func thoughtsInitHook(repoName string) func(string) error {
+	return func(wtPath string) error {
+		hlPath, err := exec.LookPath("humanlayer")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: humanlayer not found in PATH, skipping thoughts init\n")
+			return nil
+		}
+
+		cmd := exec.Command(hlPath, "thoughts", "init", "--directory", repoName)
+		cmd.Dir = wtPath
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: thoughts init failed: %v\n", err)
+		}
+		return nil
+	}
 }
 
 // GetRunDir returns the run directory path for a ticket.

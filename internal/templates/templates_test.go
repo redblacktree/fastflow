@@ -12,16 +12,18 @@ func TestList(t *testing.T) {
 		t.Fatalf("List() error: %v", err)
 	}
 
-	// Should have 28+ files (templates + .gitkeep files)
-	if len(files) < 28 {
-		t.Errorf("Expected at least 28 files, got %d", len(files))
+	// Should have 30+ files (templates + .gitkeep files)
+	if len(files) < 30 {
+		t.Errorf("Expected at least 30 files, got %d", len(files))
 	}
 
 	// Check for expected files
 	expected := []string{
 		"orchestrator.json",
 		".claude/stages/plan.md",
-		".claude/commands/create_plan.md",
+		".claude/stages/merge-conflict.md",
+		".claude/commands/ff_create_plan.md",
+		".claude/commands/ff_resolve_conflicts.md",
 		".claude/agents/codebase-locator.md",
 	}
 
