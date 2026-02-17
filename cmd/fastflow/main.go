@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/redblacktree/fastflow/internal/config"
@@ -19,7 +20,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "dev"
+var version = func() string {
+	// Set by goreleaser via -ldflags at release time.
+	// At link time the linker replaces this entire variable,
+	// so the function body only runs for dev/go-install builds.
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return "dev"
+}()
 
 func main() {
 	defer output.Close()
