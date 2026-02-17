@@ -101,6 +101,11 @@ func (c *ClaudeInvoker) Invoke(prompt string, model string) (*InvokeResult, erro
 		output.Printf("[DEBUG] Claude output length: %d chars\n", len(result.Output))
 	}
 
+	// Detect authentication failure before anything else
+	if isNotLoggedIn(result.Output) {
+		return nil, ErrNotLoggedIn
+	}
+
 	// Detect if max-turns was hit
 	result.HitMaxTurns = isMaxTurnsError(result.Output)
 	if c.Debug && result.HitMaxTurns {
@@ -114,6 +119,15 @@ func (c *ClaudeInvoker) Invoke(prompt string, model string) (*InvokeResult, erro
 func isMaxTurnsError(output string) bool {
 	return strings.Contains(output, "Reached max turns") ||
 		strings.Contains(output, "Error: Reached max turns")
+}
+
+// ErrNotLoggedIn is returned when Claude CLI reports the user is not authenticated.
+var ErrNotLoggedIn = fmt.Errorf("claude is not logged in: please run 'claude' interactively and use /login to authenticate")
+
+// isNotLoggedIn checks if the output indicates an authentication failure.
+func isNotLoggedIn(output string) bool {
+	return strings.Contains(output, "Not logged in") ||
+		strings.Contains(output, "Please run /login")
 }
 
 // InvokeWithSkill runs Claude with a skill command.

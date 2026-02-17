@@ -2,8 +2,10 @@ package runner
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -46,7 +48,8 @@ func (c *ClaudeInvoker) runWithStreamParsing(cmd *exec.Cmd) (*InvokeResult, erro
 		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
-	cmd.Stderr = os.Stderr
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start claude: %w", err)
@@ -56,6 +59,7 @@ func (c *ClaudeInvoker) runWithStreamParsing(cmd *exec.Cmd) (*InvokeResult, erro
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 
 	var finalOutput string
+	var nonJSONLines []string
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -68,6 +72,7 @@ func (c *ClaudeInvoker) runWithStreamParsing(cmd *exec.Cmd) (*InvokeResult, erro
 			if c.Debug {
 				fmt.Fprintf(os.Stderr, "[DEBUG] Failed to parse stream event: %v\n", err)
 			}
+			nonJSONLines = append(nonJSONLines, string(line))
 			continue
 		}
 
@@ -117,6 +122,12 @@ func (c *ClaudeInvoker) runWithStreamParsing(cmd *exec.Cmd) (*InvokeResult, erro
 
 	if c.Debug {
 		fmt.Fprintf(os.Stderr, "[DEBUG] Claude output length: %d chars\n", len(result.Output))
+	}
+
+	// Detect authentication failure — check non-JSON stdout lines and stderr
+	allOutput := strings.Join(nonJSONLines, "\n") + "\n" + stderrBuf.String()
+	if isNotLoggedIn(allOutput) {
+		return nil, ErrNotLoggedIn
 	}
 
 	result.HitMaxTurns = isMaxTurnsError(result.Output)

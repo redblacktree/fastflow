@@ -8,6 +8,15 @@ import (
 	"strings"
 )
 
+// ErrNotLoggedIn is returned when Claude CLI reports the user is not authenticated.
+var ErrNotLoggedIn = fmt.Errorf("claude is not logged in: please run 'claude' interactively and use /login to authenticate")
+
+// isNotLoggedIn checks if the output indicates an authentication failure.
+func isNotLoggedIn(output string) bool {
+	return strings.Contains(output, "Not logged in") ||
+		strings.Contains(output, "Please run /login")
+}
+
 // Result represents the outcome of a judge evaluation.
 type Result struct {
 	Success     bool
@@ -65,11 +74,18 @@ func (j *Judge) Evaluate(ctx *EvaluationContext) (*Result, error) {
 		}
 	}
 
-	if err != nil {
-		return nil, fmt.Errorf("judge evaluation failed: %w\nOutput: %s", err, string(output))
+	outputStr := string(output)
+
+	// Detect authentication failure before treating as generic error
+	if isNotLoggedIn(outputStr) {
+		return nil, ErrNotLoggedIn
 	}
 
-	return j.parseResponse(string(output))
+	if err != nil {
+		return nil, fmt.Errorf("judge evaluation failed: %w\nOutput: %s", err, outputStr)
+	}
+
+	return j.parseResponse(outputStr)
 }
 
 // EvaluationContext contains all the information the judge needs to evaluate a stage.
