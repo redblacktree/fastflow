@@ -16,6 +16,20 @@ Each stage communicates via markdown files in `thoughts/`, enabling clean handof
 
 - [Claude Code](https://claude.ai/claude-code) CLI installed and authenticated
 
+## Authentication
+
+Claude Code must be authenticated before fastflow can run. For headless or automated environments (Linux VMs, CI, containers) where a browser-based login isn't feasible, use `setup-token` to create a long-lived authentication token:
+
+```bash
+claude setup-token
+```
+
+This avoids the interactive OAuth flow that requires a browser. Without a valid session, fastflow will fail immediately with:
+
+```
+claude is not logged in: please run 'claude' interactively and use /login to authenticate
+```
+
 ## Installation
 
 Download the latest release from the [releases page](https://github.com/redblacktree/fastflow/releases).
