@@ -12,6 +12,7 @@ import (
 
 	"github.com/dustinrasener/fastflow/internal/config"
 	"github.com/dustinrasener/fastflow/internal/judge"
+	"github.com/dustinrasener/fastflow/internal/output"
 	"github.com/dustinrasener/fastflow/internal/state"
 	"github.com/dustinrasener/fastflow/internal/worktree"
 	"github.com/fatih/color"
@@ -71,11 +72,11 @@ func (r *Runner) Run(ctx *RunContext) error {
 	warning := color.New(color.FgYellow).SprintFunc()
 	bold := color.New(color.Bold).SprintFunc()
 
-	fmt.Printf("\n%s Running workflow: %s\n", info(">>>"), bold(ctx.Workflow))
-	fmt.Printf("    Goal: %s\n", ctx.Goal)
-	fmt.Printf("    Ticket: %s\n", ctx.Ticket)
-	fmt.Printf("    Working directory: %s\n", ctx.WorkDir)
-	fmt.Printf("    Run directory: %s\n", ctx.RunDir)
+	output.Printf("\n%s Running workflow: %s\n", info(">>>"), bold(ctx.Workflow))
+	output.Printf("    Goal: %s\n", ctx.Goal)
+	output.Printf("    Ticket: %s\n", ctx.Ticket)
+	output.Printf("    Working directory: %s\n", ctx.WorkDir)
+	output.Printf("    Run directory: %s\n", ctx.RunDir)
 
 	// Determine resume behavior
 	shouldResume, pipelineState, err := r.determineResumeState(ctx, workflow)
@@ -84,10 +85,10 @@ func (r *Runner) Run(ctx *RunContext) error {
 	}
 
 	if shouldResume && pipelineState != nil {
-		fmt.Printf("    Resume mode: %s (skipping %d completed stages)\n\n",
+		output.Printf("    Resume mode: %s (skipping %d completed stages)\n\n",
 			success("ENABLED"), len(pipelineState.CompletedStages))
 	} else {
-		fmt.Printf("    Resume mode: %s\n\n", warning("DISABLED"))
+		output.Printf("    Resume mode: %s\n\n", warning("DISABLED"))
 	}
 
 	// Create the run directory
@@ -107,8 +108,8 @@ func (r *Runner) Run(ctx *RunContext) error {
 
 	// Check if all stages are already complete
 	if shouldResume && len(pipelineState.CompletedStages) == len(workflow.Stages) {
-		fmt.Printf("%s All stages already complete!\n", success("SUCCESS"))
-		fmt.Printf("    To re-run from scratch, use: --resume=false\n")
+		output.Printf("%s All stages already complete!\n", success("SUCCESS"))
+		output.Printf("    To re-run from scratch, use: --resume=false\n")
 		return nil
 	}
 
@@ -121,29 +122,29 @@ func (r *Runner) Run(ctx *RunContext) error {
 
 		// Skip completed stages if resuming
 		if shouldResume && pipelineState.IsStageComplete(stageName) {
-			fmt.Printf("%s Stage %d/%d: %s %s\n", info(">>>"), i+1, len(workflow.Stages),
+			output.Printf("%s Stage %d/%d: %s %s\n", info(">>>"), i+1, len(workflow.Stages),
 				bold(stageName), success("[SKIPPED - already complete]"))
 			continue
 		}
 
-		fmt.Printf("%s Stage %d/%d: %s\n", info(">>>"), i+1, len(workflow.Stages), bold(stageName))
+		output.Printf("%s Stage %d/%d: %s\n", info(">>>"), i+1, len(workflow.Stages), bold(stageName))
 
 		if r.DryRun {
-			fmt.Printf("    [DRY RUN] Would execute stage: %s\n", stageName)
+			output.Printf("    [DRY RUN] Would execute stage: %s\n", stageName)
 			continue
 		}
 
 		// Execute the stage
 		result, err := r.executeStage(ctx, stageName, stage)
 		if err != nil {
-			fmt.Printf("    %s Stage failed: %v\n", errColor("ERROR"), err)
+			output.Printf("    %s Stage failed: %v\n", errColor("ERROR"), err)
 			return err
 		}
 
 		// Run judge evaluation
 		judgeResult, err := r.evaluateStage(ctx, stageName, stage, result)
 		if err != nil {
-			fmt.Printf("    %s Judge evaluation failed: %v\n", errColor("ERROR"), err)
+			output.Printf("    %s Judge evaluation failed: %v\n", errColor("ERROR"), err)
 			return err
 		}
 
@@ -153,42 +154,42 @@ func (r *Runner) Run(ctx *RunContext) error {
 			interactionAttempts++
 
 			if r.Debug {
-				fmt.Printf("[DEBUG] Question detected: %s\n", judgeResult.Reasoning)
+				output.Printf("[DEBUG] Question detected: %s\n", judgeResult.Reasoning)
 			}
 
 			var answer string
 			if r.Interactive {
 				// Human-in-the-loop mode: Prompt human for input
-				fmt.Printf("    %s Interactive prompt detected, waiting for human input...\n",
+				output.Printf("    %s Interactive prompt detected, waiting for human input...\n",
 					warning("INTERACTIVE"))
 				answer, err = r.promptHumanForAnswer(judgeResult.Reasoning)
 				if err != nil {
-					fmt.Printf("    %s Failed to get human input: %v\n", errColor("ERROR"), err)
+					output.Printf("    %s Failed to get human input: %v\n", errColor("ERROR"), err)
 					return err
 				}
 				result, err = r.continueWithAnswer(ctx, stageName, stage, result, judgeResult.Reasoning, answer)
 			} else {
 				// Auto-answer mode: Claude answers its own question
-				fmt.Printf("    %s Interactive prompt detected, auto-answering (%d/%d)...\n",
+				output.Printf("    %s Interactive prompt detected, auto-answering (%d/%d)...\n",
 					warning("INTERACTIVE"), interactionAttempts, maxInteractionAttempts)
 				result, err = r.selfAnswer(ctx, stageName, stage, result, judgeResult.Reasoning)
 			}
 
 			if err != nil {
-				fmt.Printf("    %s Continuation failed: %v\n", errColor("ERROR"), err)
+				output.Printf("    %s Continuation failed: %v\n", errColor("ERROR"), err)
 				return err
 			}
 
 			// Re-evaluate
 			judgeResult, err = r.evaluateStage(ctx, stageName, stage, result)
 			if err != nil {
-				fmt.Printf("    %s Judge evaluation failed: %v\n", errColor("ERROR"), err)
+				output.Printf("    %s Judge evaluation failed: %v\n", errColor("ERROR"), err)
 				return err
 			}
 		}
 
 		if judgeResult.Interactive && interactionAttempts >= maxInteractionAttempts {
-			fmt.Printf("    %s Max interaction attempts (%d) reached\n",
+			output.Printf("    %s Max interaction attempts (%d) reached\n",
 				warning("WARN"), maxInteractionAttempts)
 			return fmt.Errorf("stage %s still requires input after %d attempts: %s",
 				stageName, maxInteractionAttempts, judgeResult.Reasoning)
@@ -198,37 +199,37 @@ func (r *Runner) Run(ctx *RunContext) error {
 		evalRetries := 0
 		for !judgeResult.Success && evalRetries < maxEvalRetries {
 			evalRetries++
-			fmt.Printf("    %s Stage did not pass evaluation\n", errColor("FAILED"))
-			fmt.Printf("    Reason: %s\n", judgeResult.Reasoning)
-			fmt.Printf("    %s Retrying stage with feedback (%d/%d)...\n",
+			output.Printf("    %s Stage did not pass evaluation\n", errColor("FAILED"))
+			output.Printf("    Reason: %s\n", judgeResult.Reasoning)
+			output.Printf("    %s Retrying stage with feedback (%d/%d)...\n",
 				warning("RETRY"), evalRetries, maxEvalRetries)
 
 			result, err = r.retryWithFeedback(ctx, stageName, stage, result, judgeResult.Reasoning)
 			if err != nil {
-				fmt.Printf("    %s Retry failed: %v\n", errColor("ERROR"), err)
+				output.Printf("    %s Retry failed: %v\n", errColor("ERROR"), err)
 				return err
 			}
 
 			judgeResult, err = r.evaluateStage(ctx, stageName, stage, result)
 			if err != nil {
-				fmt.Printf("    %s Judge evaluation failed: %v\n", errColor("ERROR"), err)
+				output.Printf("    %s Judge evaluation failed: %v\n", errColor("ERROR"), err)
 				return err
 			}
 		}
 
 		if !judgeResult.Success {
-			fmt.Printf("    %s Stage did not pass evaluation after %d retries\n", errColor("FAILED"), maxEvalRetries)
-			fmt.Printf("    Reason: %s\n", judgeResult.Reasoning)
+			output.Printf("    %s Stage did not pass evaluation after %d retries\n", errColor("FAILED"), maxEvalRetries)
+			output.Printf("    Reason: %s\n", judgeResult.Reasoning)
 			return fmt.Errorf("stage %s failed evaluation: %s", stageName, judgeResult.Reasoning)
 		}
 
 		// Mark stage as complete
 		if err := pipelineState.MarkStageComplete(ctx.RunDir, stageName); err != nil {
-			fmt.Printf("    %s Failed to save state: %v\n", warning("WARN"), err)
+			output.Printf("    %s Failed to save state: %v\n", warning("WARN"), err)
 		}
 
-		fmt.Printf("    %s Stage completed successfully\n", success("PASS"))
-		fmt.Printf("    %s\n\n", judgeResult.Reasoning)
+		output.Printf("    %s Stage completed successfully\n", success("PASS"))
+		output.Printf("    %s\n\n", judgeResult.Reasoning)
 
 		// Handle checkpoint
 		if stage.Checkpoint && !r.NoReview {
@@ -238,7 +239,7 @@ func (r *Runner) Run(ctx *RunContext) error {
 		}
 	}
 
-	fmt.Printf("\n%s Pipeline completed successfully!\n", success("SUCCESS"))
+	output.Printf("\n%s Pipeline completed successfully!\n", success("SUCCESS"))
 	return nil
 }
 
@@ -365,14 +366,14 @@ func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.S
 	for result.HitMaxTurns && resumptions < r.MaxResumptions {
 		resumptions++
 		warning := color.New(color.FgYellow).SprintFunc()
-		fmt.Printf("    %s Max turns reached, attempting handoff/resume (%d/%d)...\n",
+		output.Printf("    %s Max turns reached, attempting handoff/resume (%d/%d)...\n",
 			warning("RESUME"), resumptions, r.MaxResumptions)
 
 		// Run create_handoff to save state
 		handoffResult, handoffErr := r.runHandoffCycle(ctx, stageName, model, invoker)
 		if handoffErr != nil {
 			if r.Debug {
-				fmt.Printf("[DEBUG] Handoff/resume failed: %v\n", handoffErr)
+				output.Printf("[DEBUG] Handoff/resume failed: %v\n", handoffErr)
 			}
 			// Continue with partial result rather than failing completely
 			break
@@ -386,7 +387,7 @@ func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.S
 
 	if result.HitMaxTurns && resumptions >= r.MaxResumptions {
 		warning := color.New(color.FgYellow).SprintFunc()
-		fmt.Printf("    %s Max resumptions (%d) reached, proceeding with partial result\n",
+		output.Printf("    %s Max resumptions (%d) reached, proceeding with partial result\n",
 			warning("WARN"), r.MaxResumptions)
 	}
 
@@ -400,7 +401,7 @@ func (r *Runner) runHandoffCycle(ctx *RunContext, stageName string, model string
 		stageName, ctx.Ticket, ctx.Goal, ctx.RunDir)
 
 	if r.Debug {
-		fmt.Printf("[DEBUG] Running create_handoff skill...\n")
+		output.Printf("[DEBUG] Running create_handoff skill...\n")
 	}
 
 	_, createErr := invoker.InvokeWithSkill("create_handoff", model, handoffContext)
@@ -410,7 +411,7 @@ func (r *Runner) runHandoffCycle(ctx *RunContext, stageName string, model string
 
 	// Step 2: Resume from handoff
 	if r.Debug {
-		fmt.Printf("[DEBUG] Running resume_handoff skill...\n")
+		output.Printf("[DEBUG] Running resume_handoff skill...\n")
 	}
 
 	resumeResult, resumeErr := invoker.InvokeWithSkill("resume_handoff", model, handoffContext)
@@ -490,9 +491,9 @@ func (r *Runner) handleCheckpoint(ctx *RunContext, stageName string) error {
 	warning := color.New(color.FgYellow).SprintFunc()
 	bold := color.New(color.Bold).SprintFunc()
 
-	fmt.Printf("\n%s Checkpoint reached after stage: %s\n", warning("PAUSE"), bold(stageName))
-	fmt.Printf("    Please review the output in: %s\n", ctx.RunDir)
-	fmt.Printf("    Press Enter to continue, or Ctrl+C to abort...\n")
+	output.Printf("\n%s Checkpoint reached after stage: %s\n", warning("PAUSE"), bold(stageName))
+	output.Printf("    Please review the output in: %s\n", ctx.RunDir)
+	output.Printf("    Press Enter to continue, or Ctrl+C to abort...\n")
 
 	reader := bufio.NewReader(os.Stdin)
 	_, err := reader.ReadString('\n')
@@ -688,8 +689,8 @@ func (r *Runner) promptHumanForAnswer(question string) (string, error) {
 	info := color.New(color.FgCyan).SprintFunc()
 	bold := color.New(color.Bold).SprintFunc()
 
-	fmt.Printf("\n%s %s\n", info("QUESTION:"), bold(question))
-	fmt.Printf("%s Enter your answer (two blank lines to submit):\n", info(">>>"))
+	output.Printf("\n%s %s\n", info("QUESTION:"), bold(question))
+	output.Printf("%s Enter your answer (two blank lines to submit):\n", info(">>>"))
 
 	reader := bufio.NewReader(os.Stdin)
 	var lines []string

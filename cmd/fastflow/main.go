@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/dustinrasener/fastflow/internal/config"
+	"github.com/dustinrasener/fastflow/internal/output"
 	"github.com/dustinrasener/fastflow/internal/runner"
 	"github.com/dustinrasener/fastflow/internal/templates"
 	"github.com/dustinrasener/fastflow/internal/worktree"
@@ -21,6 +22,7 @@ import (
 var version = "dev"
 
 func main() {
+	defer output.Close()
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -155,9 +157,22 @@ var (
 	flagNoWorktree  bool
 	flagNoFetch     bool
 	flagVerbose     bool
+	flagLogFile     string
+	flagNoColor     bool
 )
 
 func init() {
+	// Persistent flags (available to all commands)
+	rootCmd.PersistentFlags().StringVar(&flagLogFile, "log-file", "", "Write output to a log file (ANSI codes stripped)")
+	rootCmd.PersistentFlags().BoolVar(&flagNoColor, "no-color", false, "Disable colored output")
+
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		if flagNoColor {
+			color.NoColor = true
+		}
+		return output.Setup(flagLogFile)
+	}
+
 	// Run command flags
 	runCmd.Flags().StringVar(&flagGoal, "goal", "", "Goal description for the pipeline")
 	runCmd.Flags().StringVar(&flagGoalFile, "goal-file", "", "Path to file containing goal description")
@@ -297,7 +312,7 @@ func readPipedStdin() (string, error) {
 // Two consecutive blank lines signal end of input.
 func readInteractiveStdin() (string, error) {
 	info := color.New(color.FgCyan).SprintFunc()
-	fmt.Printf("%s Enter goal (two blank lines to submit):\n", info(">>>"))
+	output.Printf("%s Enter goal (two blank lines to submit):\n", info(">>>"))
 
 	scanner := bufio.NewScanner(os.Stdin)
 	var lines []string
@@ -384,7 +399,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 
 	if flagNoWorktree {
 		// User explicitly requested no worktree
-		fmt.Printf("%s Using current directory (--no-worktree)\n", info(">>>"))
+		output.Printf("%s Using current directory (--no-worktree)\n", info(">>>"))
 		// Get current branch name for context
 		branchName = getCurrentBranch(cwd)
 		if branchName == "" {
@@ -400,17 +415,17 @@ func runRun(cmd *cobra.Command, args []string) error {
 			opts.AfterCreate = runner.DefaultPostCreateHooks(mgr.RepoName)
 		}
 
-		fmt.Printf("%s Setting up worktree for ticket: %s\n", info(">>>"), flagTicket)
+		output.Printf("%s Setting up worktree for ticket: %s\n", info(">>>"), flagTicket)
 		wtPath, existed, err := runner.SetupWorktree(flagTicket, opts)
 		if err != nil {
-			fmt.Printf("    Note: Using current directory (worktree creation failed: %v)\n", err)
+			output.Printf("    Note: Using current directory (worktree creation failed: %v)\n", err)
 		} else {
 			workDir = wtPath
 			worktreeExisted = existed
 			if existed {
-				fmt.Printf("    Worktree: %s (existing)\n", workDir)
+				output.Printf("    Worktree: %s (existing)\n", workDir)
 			} else {
-				fmt.Printf("    Worktree: %s (created)\n", workDir)
+				output.Printf("    Worktree: %s (created)\n", workDir)
 			}
 		}
 	}
@@ -455,78 +470,78 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		configPath = "orchestrator.json"
 	}
 
-	fmt.Printf("Validating configuration: %s\n\n", bold(configPath))
+	output.Printf("Validating configuration: %s\n\n", bold(configPath))
 
 	// Load config
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		fmt.Printf("%s Failed to load config: %v\n", errColor("ERROR"), err)
+		output.Printf("%s Failed to load config: %v\n", errColor("ERROR"), err)
 		return err
 	}
-	fmt.Printf("%s Configuration file loaded\n", success("OK"))
+	output.Printf("%s Configuration file loaded\n", success("OK"))
 
 	// Validate config structure
 	result := config.Validate(cfg)
 	if !result.IsValid() {
-		fmt.Printf("%s Configuration validation failed:\n", errColor("ERROR"))
+		output.Printf("%s Configuration validation failed:\n", errColor("ERROR"))
 		for _, e := range result.Errors {
-			fmt.Printf("  - %s: %s\n", e.Field, e.Message)
+			output.Printf("  - %s: %s\n", e.Field, e.Message)
 		}
 		return fmt.Errorf("configuration validation failed")
 	}
-	fmt.Printf("%s Configuration structure valid\n", success("OK"))
+	output.Printf("%s Configuration structure valid\n", success("OK"))
 
 	// Show workflows
-	fmt.Printf("\n%s Workflows:\n", bold("Configured"))
+	output.Printf("\n%s Workflows:\n", bold("Configured"))
 	for name, wf := range cfg.Workflows {
 		marker := " "
 		if name == cfg.DefaultWorkflow {
 			marker = "*"
 		}
-		fmt.Printf("  %s %s: %s\n", marker, name, wf.Description)
-		fmt.Printf("      Stages: %v\n", wf.Stages)
+		output.Printf("  %s %s: %s\n", marker, name, wf.Description)
+		output.Printf("      Stages: %v\n", wf.Stages)
 	}
 
 	// Show stages
-	fmt.Printf("\n%s Stages:\n", bold("Configured"))
+	output.Printf("\n%s Stages:\n", bold("Configured"))
 	for name, stage := range cfg.Stages {
-		fmt.Printf("  - %s", name)
+		output.Printf("  - %s", name)
 		if stage.Model != "" {
-			fmt.Printf(" (model: %s)", stage.Model)
+			output.Printf(" (model: %s)", stage.Model)
 		}
 		if stage.Checkpoint {
-			fmt.Printf(" %s", warning("[checkpoint]"))
+			output.Printf(" %s", warning("[checkpoint]"))
 		}
-		fmt.Println()
+		output.Println()
 		if stage.PromptFile != "" {
-			fmt.Printf("      Prompt: %s\n", stage.PromptFile)
+			output.Printf("      Prompt: %s\n", stage.PromptFile)
 		}
 		if stage.Skill != "" {
-			fmt.Printf("      Skill: %s\n", stage.Skill)
+			output.Printf("      Skill: %s\n", stage.Skill)
 		}
 	}
 
 	// Validate dependencies
-	fmt.Printf("\n%s Checking dependencies...\n", bold(""))
+	output.Printf("\n%s Checking dependencies...\n", bold(""))
 	depResult := config.ValidateDependencies(cfg)
 	if !depResult.IsValid() {
-		fmt.Printf("%s Dependency validation failed:\n", errColor("ERROR"))
+		output.Printf("%s Dependency validation failed:\n", errColor("ERROR"))
 		for _, e := range depResult.Errors {
-			fmt.Printf("  - %s: %s\n", e.Field, e.Message)
+			output.Printf("  - %s: %s\n", e.Field, e.Message)
 		}
 		return fmt.Errorf("dependency validation failed")
 	}
-	fmt.Printf("%s All dependencies found\n", success("OK"))
+	output.Printf("%s All dependencies found\n", success("OK"))
 
 	// Check for claude CLI
-	fmt.Printf("\n%s Checking runtime dependencies...\n", bold(""))
+	output.Printf("\n%s Checking runtime dependencies...\n", bold(""))
 	if _, err := findExecutable("which", "claude"); err != nil {
-		fmt.Printf("%s Claude CLI not found in PATH\n", warning("WARN"))
+		output.Printf("%s Claude CLI not found in PATH\n", warning("WARN"))
 	} else {
-		fmt.Printf("%s Claude CLI found\n", success("OK"))
+		output.Printf("%s Claude CLI found\n", success("OK"))
 	}
 
-	fmt.Printf("\n%s Configuration is valid!\n", success("SUCCESS"))
+	output.Printf("\n%s Configuration is valid!\n", success("SUCCESS"))
 	return nil
 }
 
@@ -549,7 +564,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("%s %s is not a git repository (no .git directory found)", errColor("ERROR"), targetDir)
 	}
 
-	fmt.Printf("%s Initializing fastflow in %s\n\n", info(">>>"), bold(targetDir))
+	output.Printf("%s Initializing fastflow in %s\n\n", info(">>>"), bold(targetDir))
 
 	opts := templates.WriteOptions{
 		Force:  flagInitForce,
@@ -557,7 +572,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	if flagDryRun {
-		fmt.Printf("%s Dry run mode - no files will be written\n\n", warning("NOTE"))
+		output.Printf("%s Dry run mode - no files will be written\n\n", warning("NOTE"))
 	}
 
 	result, err := templates.Write(targetDir, opts)
@@ -567,32 +582,32 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Print results
 	if len(result.Created) > 0 {
-		fmt.Printf("%s Created %d files:\n", success("OK"), len(result.Created))
+		output.Printf("%s Created %d files:\n", success("OK"), len(result.Created))
 		for _, f := range result.Created {
-			fmt.Printf("    %s\n", f)
+			output.Printf("    %s\n", f)
 		}
 	}
 
 	if len(result.Overwritten) > 0 {
-		fmt.Printf("\n%s Overwritten %d files:\n", warning("OK"), len(result.Overwritten))
+		output.Printf("\n%s Overwritten %d files:\n", warning("OK"), len(result.Overwritten))
 		for _, f := range result.Overwritten {
-			fmt.Printf("    %s\n", f)
+			output.Printf("    %s\n", f)
 		}
 	}
 
 	if len(result.Skipped) > 0 {
-		fmt.Printf("\n%s Skipped %d existing files (use --force to overwrite):\n", warning("SKIP"), len(result.Skipped))
+		output.Printf("\n%s Skipped %d existing files (use --force to overwrite):\n", warning("SKIP"), len(result.Skipped))
 		for _, f := range result.Skipped {
-			fmt.Printf("    %s\n", f)
+			output.Printf("    %s\n", f)
 		}
 	}
 
 	if !flagDryRun {
-		fmt.Printf("\n%s Fastflow initialized!\n", success("SUCCESS"))
-		fmt.Printf("\n%s Next steps:\n", info(">>>"))
-		fmt.Printf("    1. Review orchestrator.json and customize workflows\n")
-		fmt.Printf("    2. Run 'fastflow validate' to verify configuration\n")
-		fmt.Printf("    3. Run 'fastflow run --goal \"...\" --ticket TICKET-123'\n")
+		output.Printf("\n%s Fastflow initialized!\n", success("SUCCESS"))
+		output.Printf("\n%s Next steps:\n", info(">>>"))
+		output.Printf("    1. Review orchestrator.json and customize workflows\n")
+		output.Printf("    2. Run 'fastflow validate' to verify configuration\n")
+		output.Printf("    3. Run 'fastflow run --goal \"...\" --ticket TICKET-123'\n")
 	}
 
 	return nil
@@ -654,20 +669,20 @@ func runList(cmd *cobra.Command, args []string) error {
 
 	if len(worktrees) == 0 {
 		if flagListPrefix != "" {
-			fmt.Printf("No worktrees found matching prefix: %s\n", flagListPrefix)
+			output.Printf("No worktrees found matching prefix: %s\n", flagListPrefix)
 		} else {
-			fmt.Printf("No worktrees found for repository: %s\n", mgr.RepoName)
+			output.Printf("No worktrees found for repository: %s\n", mgr.RepoName)
 		}
 		return nil
 	}
 
 	// Print header
-	fmt.Printf("%s  %s  %s  %s\n",
+	output.Printf("%s  %s  %s  %s\n",
 		bold(fmt.Sprintf("%-12s", "Ticket")),
 		bold(fmt.Sprintf("%-10s", "Status")),
 		bold(fmt.Sprintf("%-20s", "Created")),
 		bold("Summary"))
-	fmt.Printf("%s  %s  %s  %s\n",
+	output.Printf("%s  %s  %s  %s\n",
 		strings.Repeat("─", 12),
 		strings.Repeat("─", 10),
 		strings.Repeat("─", 20),
@@ -710,10 +725,10 @@ func runList(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		fmt.Printf("%-12s  %-10s  %-20s  %s\n", wt.Ticket, status, created, summary)
+		output.Printf("%-12s  %-10s  %-20s  %s\n", wt.Ticket, status, created, summary)
 	}
 
-	fmt.Printf("\n%d worktree(s) found\n", len(worktrees))
+	output.Printf("\n%d worktree(s) found\n", len(worktrees))
 	return nil
 }
 
@@ -759,7 +774,7 @@ func runClean(cmd *cobra.Command, args []string) error {
 			}
 		}
 		if len(toClean) == 0 {
-			fmt.Printf("No worktrees found matching prefix: %s\n", flagCleanPrefix)
+			output.Printf("No worktrees found matching prefix: %s\n", flagCleanPrefix)
 			return nil
 		}
 	} else {
@@ -768,17 +783,17 @@ func runClean(cmd *cobra.Command, args []string) error {
 
 	// Confirm if not forced
 	if !flagCleanForce && len(toClean) > 0 {
-		fmt.Printf("%s The following worktrees will be removed:\n", warning("WARNING"))
+		output.Printf("%s The following worktrees will be removed:\n", warning("WARNING"))
 		for _, wt := range toClean {
-			fmt.Printf("  - %s (%s)\n", wt.Ticket, wt.Path)
+			output.Printf("  - %s (%s)\n", wt.Ticket, wt.Path)
 		}
-		fmt.Printf("\nProceed? [y/N]: ")
+		output.Printf("\nProceed? [y/N]: ")
 
 		reader := bufio.NewReader(os.Stdin)
 		response, _ := reader.ReadString('\n')
 		response = strings.TrimSpace(strings.ToLower(response))
 		if response != "y" && response != "yes" {
-			fmt.Println("Aborted.")
+			output.Println("Aborted.")
 			return nil
 		}
 	}
@@ -787,19 +802,19 @@ func runClean(cmd *cobra.Command, args []string) error {
 	var removed, failed int
 	for _, wt := range toClean {
 		if err := mgr.Remove(wt.Ticket); err != nil {
-			fmt.Printf("%s Failed to remove %s: %v\n", errColor("ERROR"), wt.Ticket, err)
+			output.Printf("%s Failed to remove %s: %v\n", errColor("ERROR"), wt.Ticket, err)
 			failed++
 		} else {
-			fmt.Printf("%s Removed %s\n", success("OK"), wt.Ticket)
+			output.Printf("%s Removed %s\n", success("OK"), wt.Ticket)
 			removed++
 		}
 	}
 
-	fmt.Printf("\n%d worktree(s) removed", removed)
+	output.Printf("\n%d worktree(s) removed", removed)
 	if failed > 0 {
-		fmt.Printf(", %d failed", failed)
+		output.Printf(", %d failed", failed)
 	}
-	fmt.Println()
+	output.Println()
 
 	return nil
 }
@@ -808,9 +823,9 @@ func runClean(cmd *cobra.Command, args []string) error {
 func getCurrentBranch(dir string) string {
 	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
 	cmd.Dir = dir
-	output, err := cmd.Output()
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(output))
+	return strings.TrimSpace(string(out))
 }

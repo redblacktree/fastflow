@@ -5,9 +5,10 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/dustinrasener/fastflow/internal/output"
 )
 
 // ClaudeInvoker handles invocation of the Claude CLI.
@@ -60,9 +61,9 @@ func (c *ClaudeInvoker) Invoke(prompt string, model string) (*InvokeResult, erro
 	args = append(args, prompt)
 
 	if c.Debug {
-		fmt.Printf("[DEBUG] Claude command: claude %v\n", args[:len(args)-1]) // Don't print full prompt
-		fmt.Printf("[DEBUG] Prompt length: %d chars\n", len(prompt))
-		fmt.Printf("[DEBUG] Working directory: %s\n", c.WorkDir)
+		output.Printf("[DEBUG] Claude command: claude %v\n", args[:len(args)-1]) // Don't print full prompt
+		output.Printf("[DEBUG] Prompt length: %d chars\n", len(prompt))
+		output.Printf("[DEBUG] Working directory: %s\n", c.WorkDir)
 	}
 
 	cmd := exec.Command("claude", args...)
@@ -74,7 +75,7 @@ func (c *ClaudeInvoker) Invoke(prompt string, model string) (*InvokeResult, erro
 
 	// Existing --print path: capture output while also streaming to stdout
 	var outputBuf bytes.Buffer
-	multiWriter := io.MultiWriter(os.Stdout, &outputBuf)
+	multiWriter := io.MultiWriter(output.Writer, &outputBuf)
 
 	cmd.Stdout = multiWriter
 	cmd.Stderr = multiWriter
@@ -89,7 +90,7 @@ func (c *ClaudeInvoker) Invoke(prompt string, model string) (*InvokeResult, erro
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			result.ExitCode = exitErr.ExitCode()
 			if c.Debug {
-				fmt.Printf("[DEBUG] Claude exited with code: %d\n", result.ExitCode)
+				output.Printf("[DEBUG] Claude exited with code: %d\n", result.ExitCode)
 			}
 		} else {
 			return nil, fmt.Errorf("failed to run claude: %w", err)
@@ -97,13 +98,13 @@ func (c *ClaudeInvoker) Invoke(prompt string, model string) (*InvokeResult, erro
 	}
 
 	if c.Debug {
-		fmt.Printf("[DEBUG] Claude output length: %d chars\n", len(result.Output))
+		output.Printf("[DEBUG] Claude output length: %d chars\n", len(result.Output))
 	}
 
 	// Detect if max-turns was hit
 	result.HitMaxTurns = isMaxTurnsError(result.Output)
 	if c.Debug && result.HitMaxTurns {
-		fmt.Printf("[DEBUG] Max turns limit detected in output\n")
+		output.Printf("[DEBUG] Max turns limit detected in output\n")
 	}
 
 	return result, nil

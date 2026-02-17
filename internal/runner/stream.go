@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/dustinrasener/fastflow/internal/output"
 	"github.com/fatih/color"
 )
 
@@ -129,7 +130,7 @@ func (c *ClaudeInvoker) runWithStreamParsing(cmd *exec.Cmd) (*InvokeResult, erro
 // printToolActivity prints a formatted tool invocation line.
 func printToolActivity(toolName string, rawInput json.RawMessage) {
 	summary := summarizeToolInput(toolName, rawInput)
-	fmt.Printf("    [%s] %s\n", toolColor(toolName), summary)
+	output.Printf("    [%s] %s\n", toolColor(toolName), summary)
 }
 
 // printTextActivity prints a summary of text output from Claude.
@@ -141,7 +142,7 @@ func printTextActivity(text string) {
 	if len(firstLine) > 120 {
 		firstLine = firstLine[:117] + "..."
 	}
-	fmt.Printf("    %s %s\n", dimColor("[text]"), dimColor(firstLine))
+	output.Printf("    %s %s\n", dimColor("[text]"), dimColor(firstLine))
 }
 
 // summarizeToolInput returns a human-readable summary of a tool's input.
