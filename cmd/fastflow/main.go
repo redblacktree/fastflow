@@ -20,15 +20,21 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = func() string {
-	// Set by goreleaser via -ldflags at release time.
-	// At link time the linker replaces this entire variable,
-	// so the function body only runs for dev/go-install builds.
-	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
-		return info.Main.Version
+// version is set by goreleaser via -ldflags "-X main.version=...".
+// Must be a plain string constant for -X to work.
+var version = "dev"
+
+func init() {
+	// For go install builds, read the version stamped by the Go toolchain.
+	if version == "dev" {
+		if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+			version = info.Main.Version
+		}
 	}
-	return "dev"
-}()
+	// rootCmd.Version must be set here because the var initializer runs
+	// before init(), so the command would capture "dev" otherwise.
+	rootCmd.Version = version
+}
 
 func main() {
 	defer output.Close()
@@ -38,9 +44,8 @@ func main() {
 }
 
 var rootCmd = &cobra.Command{
-	Use:     "fastflow",
-	Short:   "Orchestrate multi-agent development workflows",
-	Version: version,
+	Use:   "fastflow",
+	Short: "Orchestrate multi-agent development workflows",
 	Long: `fastflow automates the full development workflow:
 Goal → Worktree → Research → Plan → Implement → Validate → Commit/PR
 
