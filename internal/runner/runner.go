@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dustinrasener/fastflow/internal/config"
-	"github.com/dustinrasener/fastflow/internal/judge"
-	"github.com/dustinrasener/fastflow/internal/output"
-	"github.com/dustinrasener/fastflow/internal/state"
-	"github.com/dustinrasener/fastflow/internal/worktree"
+	"github.com/redblacktree/fastflow/internal/config"
+	"github.com/redblacktree/fastflow/internal/judge"
+	"github.com/redblacktree/fastflow/internal/output"
+	"github.com/redblacktree/fastflow/internal/state"
+	"github.com/redblacktree/fastflow/internal/worktree"
 	"github.com/fatih/color"
 )
 

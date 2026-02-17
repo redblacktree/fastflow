@@ -1,4 +1,4 @@
-module github.com/dustinrasener/fastflow
+module github.com/redblacktree/fastflow
 
 go 1.25.5
 

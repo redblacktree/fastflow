@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/dustinrasener/fastflow/internal/output"
+	"github.com/redblacktree/fastflow/internal/output"
 	"github.com/fatih/color"
 )
 

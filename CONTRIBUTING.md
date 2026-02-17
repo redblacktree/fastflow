@@ -16,7 +16,7 @@ Thank you for your interest in contributing to fastflow!
 
 ```bash
 # Clone the repository
-git clone https://github.com/dustinrasener/fastflow.git
+git clone https://github.com/redblacktree/fastflow.git
 cd fastflow
 
 # Build

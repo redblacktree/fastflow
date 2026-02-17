@@ -10,11 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/dustinrasener/fastflow/internal/config"
-	"github.com/dustinrasener/fastflow/internal/output"
-	"github.com/dustinrasener/fastflow/internal/runner"
-	"github.com/dustinrasener/fastflow/internal/templates"
-	"github.com/dustinrasener/fastflow/internal/worktree"
+	"github.com/redblacktree/fastflow/internal/config"
+	"github.com/redblacktree/fastflow/internal/output"
+	"github.com/redblacktree/fastflow/internal/runner"
+	"github.com/redblacktree/fastflow/internal/templates"
+	"github.com/redblacktree/fastflow/internal/worktree"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
