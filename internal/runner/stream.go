@@ -105,8 +105,12 @@ func (c *ClaudeInvoker) runWithStreamParsing(cmd *exec.Cmd) (*InvokeResult, erro
 
 	cmdErr := cmd.Wait()
 
+	// Collect raw output for auth detection (non-JSON lines + stderr)
+	allOutput := strings.Join(nonJSONLines, "\n") + "\n" + stderrBuf.String()
+
 	result := &InvokeResult{
-		Output: finalOutput,
+		Output:    finalOutput,
+		RawOutput: allOutput,
 	}
 
 	if cmdErr != nil {
@@ -122,17 +126,6 @@ func (c *ClaudeInvoker) runWithStreamParsing(cmd *exec.Cmd) (*InvokeResult, erro
 
 	if c.Debug {
 		fmt.Fprintf(os.Stderr, "[DEBUG] Claude output length: %d chars\n", len(result.Output))
-	}
-
-	// Detect authentication failure — check non-JSON stdout lines and stderr
-	allOutput := strings.Join(nonJSONLines, "\n") + "\n" + stderrBuf.String()
-	if isNotLoggedIn(allOutput) {
-		return nil, ErrNotLoggedIn
-	}
-
-	result.HitMaxTurns = isMaxTurnsError(result.Output)
-	if c.Debug && result.HitMaxTurns {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Max turns limit detected in output\n")
 	}
 
 	return result, nil

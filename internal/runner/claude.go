@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -36,13 +37,35 @@ func NewClaudeInvoker(workDir string) *ClaudeInvoker {
 
 // InvokeResult contains the result of a Claude invocation.
 type InvokeResult struct {
-	Output       string
-	ExitCode     int
-	HitMaxTurns  bool
+	Output      string
+	RawOutput   string // Full output for auth detection (includes stderr, non-JSON lines)
+	ExitCode    int
+	HitMaxTurns bool
 }
 
 // Invoke runs Claude with the given prompt and model.
+// If ANTHROPIC_API_KEY is set but rejected, it retries without the key.
 func (c *ClaudeInvoker) Invoke(prompt string, model string) (*InvokeResult, error) {
+	result, err := c.invokeWithEnv(prompt, model, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// If API key was rejected and is set in env, retry without it
+	if isInvalidAPIKey(result.RawOutput) && os.Getenv("ANTHROPIC_API_KEY") != "" {
+		output.Printf("WARNING: ANTHROPIC_API_KEY is set but was rejected. Falling back to claude.ai session.\n")
+		retryResult, retryErr := c.invokeWithEnv(prompt, model, envWithoutAPIKey())
+		if retryErr != nil {
+			return nil, fmt.Errorf("fallback also failed: %w (original: ANTHROPIC_API_KEY rejected)", retryErr)
+		}
+		return retryResult, nil
+	}
+
+	return result, nil
+}
+
+// invokeWithEnv is the internal implementation that runs Claude with an optional env override.
+func (c *ClaudeInvoker) invokeWithEnv(prompt string, model string, env []string) (*InvokeResult, error) {
 	args := []string{
 		"--model", model,
 		"--max-turns", fmt.Sprintf("%d", c.MaxTurns),
@@ -68,12 +91,26 @@ func (c *ClaudeInvoker) Invoke(prompt string, model string) (*InvokeResult, erro
 
 	cmd := exec.Command("claude", args...)
 	cmd.Dir = c.WorkDir
-
-	if c.Verbose {
-		return c.runWithStreamParsing(cmd)
+	if env != nil {
+		cmd.Env = env
 	}
 
-	// Existing --print path: capture output while also streaming to stdout
+	if c.Verbose {
+		result, err := c.runWithStreamParsing(cmd)
+		if err != nil {
+			return nil, err
+		}
+		if isNotLoggedIn(result.RawOutput) {
+			return nil, ErrNotLoggedIn
+		}
+		result.HitMaxTurns = isMaxTurnsError(result.Output)
+		if c.Debug && result.HitMaxTurns {
+			output.Printf("[DEBUG] Max turns limit detected in output\n")
+		}
+		return result, nil
+	}
+
+	// --print path: capture output while also streaming to stdout
 	var outputBuf bytes.Buffer
 	multiWriter := io.MultiWriter(output.Writer, &outputBuf)
 
@@ -85,6 +122,7 @@ func (c *ClaudeInvoker) Invoke(prompt string, model string) (*InvokeResult, erro
 	result := &InvokeResult{
 		Output: outputBuf.String(),
 	}
+	result.RawOutput = result.Output
 
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -102,7 +140,7 @@ func (c *ClaudeInvoker) Invoke(prompt string, model string) (*InvokeResult, erro
 	}
 
 	// Detect authentication failure before anything else
-	if isNotLoggedIn(result.Output) {
+	if isNotLoggedIn(result.RawOutput) {
 		return nil, ErrNotLoggedIn
 	}
 
@@ -128,6 +166,27 @@ var ErrNotLoggedIn = fmt.Errorf("claude is not logged in: please run 'claude' in
 func isNotLoggedIn(output string) bool {
 	return strings.Contains(output, "Not logged in") ||
 		strings.Contains(output, "Please run /login")
+}
+
+// ErrInvalidAPIKey is returned when the API key is set but rejected by the API.
+var ErrInvalidAPIKey = fmt.Errorf("ANTHROPIC_API_KEY is set but was rejected by the API")
+
+// isInvalidAPIKey checks if the output indicates an API key was rejected.
+func isInvalidAPIKey(output string) bool {
+	return strings.Contains(output, "invalid x-api-key") ||
+		strings.Contains(output, "authentication_error") ||
+		strings.Contains(output, "Invalid API key")
+}
+
+// envWithoutAPIKey returns a copy of the current environment with ANTHROPIC_API_KEY removed.
+func envWithoutAPIKey() []string {
+	var filtered []string
+	for _, env := range os.Environ() {
+		if !strings.HasPrefix(env, "ANTHROPIC_API_KEY=") {
+			filtered = append(filtered, env)
+		}
+	}
+	return filtered
 }
 
 // InvokeWithSkill runs Claude with a skill command.
