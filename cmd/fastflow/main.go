@@ -230,9 +230,10 @@ func init() {
 // resolveGoal determines the goal from various input sources in priority order:
 // 1. --goal flag (explicit)
 // 2. --goal-file flag (file-based)
-// 3. Piped stdin
-// 4. Interactive stdin prompt
-func resolveGoal() (string, error) {
+// 3. Existing goal.md in run directory
+// 4. Piped stdin
+// 5. Interactive stdin prompt
+func resolveGoal(runDir string) (string, error) {
 	// Priority 1: Explicit --goal flag
 	if flagGoal != "" {
 		return flagGoal, nil
@@ -243,14 +244,19 @@ func resolveGoal() (string, error) {
 		return readGoalFile(flagGoalFile)
 	}
 
-	// Priority 3: Check if stdin has piped data
+	// Priority 3: Existing goal.md in run directory
+	if existing := runner.ReadExistingGoal(runDir); existing != "" {
+		return existing, nil
+	}
+
+	// Priority 4: Check if stdin has piped data
 	stat, _ := os.Stdin.Stat()
 	if (stat.Mode() & os.ModeCharDevice) == 0 {
 		// Data is being piped in
 		return readPipedStdin()
 	}
 
-	// Priority 4: Interactive stdin prompt
+	// Priority 5: Interactive stdin prompt
 	return readInteractiveStdin()
 }
 
@@ -391,15 +397,6 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("%s %s", errColor("ERROR"), depResult.Error())
 	}
 
-	// Resolve goal from various input sources (unless workflow skips goal)
-	var goal string
-	if !workflow.SkipGoal {
-		goal, err = resolveGoal()
-		if err != nil {
-			return fmt.Errorf("%s Failed to get goal: %w", errColor("ERROR"), err)
-		}
-	}
-
 	// Get current working directory
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -450,13 +447,25 @@ func runRun(cmd *cobra.Command, args []string) error {
 		resumeMode = "false" // Fresh worktree, no need to check for state
 	}
 
+	// Compute run directory (needs workDir from worktree setup)
+	runDir := runner.GetRunDir(workDir, flagTicket)
+
+	// Resolve goal from various input sources (unless workflow skips goal)
+	var goal string
+	if !workflow.SkipGoal {
+		goal, err = resolveGoal(runDir)
+		if err != nil {
+			return fmt.Errorf("%s Failed to get goal: %w", errColor("ERROR"), err)
+		}
+	}
+
 	// Create run context
 	ctx := &runner.RunContext{
 		Goal:       goal,
 		Ticket:     flagTicket,
 		Workflow:   flagWorkflow,
 		WorkDir:    workDir,
-		RunDir:     runner.GetRunDir(workDir, flagTicket),
+		RunDir:     runDir,
 		RepoPath:   cwd,
 		BranchName: branchName,
 	}

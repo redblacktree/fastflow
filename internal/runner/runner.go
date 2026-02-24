@@ -101,7 +101,7 @@ func (r *Runner) Run(ctx *RunContext) error {
 		pipelineState = state.NewState(ctx.Workflow, workflow.Stages)
 	}
 
-	// Write the goal file (always, to ensure it's current)
+	// Write the goal file (preserves existing if goal unchanged)
 	if err := r.writeGoalFile(ctx); err != nil {
 		return fmt.Errorf("failed to write goal file: %w", err)
 	}
@@ -504,9 +504,18 @@ func (r *Runner) handleCheckpoint(ctx *RunContext, stageName string) error {
 	return nil
 }
 
-// writeGoalFile creates the initial goal.md file in the run directory.
+// writeGoalFile creates or updates the goal.md file in the run directory.
+// If goal.md already exists with a non-empty goal that matches ctx.Goal,
+// the file is preserved to retain any user-edited content.
 func (r *Runner) writeGoalFile(ctx *RunContext) error {
 	goalPath := filepath.Join(ctx.RunDir, "goal.md")
+
+	// If goal.md already exists with a matching non-empty goal, preserve it.
+	if existing, err := os.ReadFile(goalPath); err == nil {
+		if existingGoal := parseGoalField(string(existing)); existingGoal != "" && ctx.Goal == existingGoal {
+			return nil
+		}
+	}
 
 	content := fmt.Sprintf(`---
 ticket: %s
@@ -528,6 +537,47 @@ Run Directory: %s
 		ctx.Goal, filepath.Base(ctx.RepoPath), ctx.BranchName, ctx.WorkDir, ctx.RunDir)
 
 	return os.WriteFile(goalPath, []byte(content), 0644)
+}
+
+// ReadExistingGoal reads the goal from an existing goal.md in the given directory.
+// Returns an empty string if the file doesn't exist or has no goal.
+func ReadExistingGoal(runDir string) string {
+	goalPath := filepath.Join(runDir, "goal.md")
+	content, err := os.ReadFile(goalPath)
+	if err != nil {
+		return ""
+	}
+	return parseGoalField(string(content))
+}
+
+// parseGoalField extracts the goal: value from goal.md frontmatter content.
+// Returns empty string if content has no frontmatter or no non-empty goal field.
+func parseGoalField(content string) string {
+	if !strings.HasPrefix(content, "---") {
+		return ""
+	}
+
+	lines := strings.Split(content, "\n")
+	endIdx := -1
+	for i := 1; i < len(lines); i++ {
+		if lines[i] == "---" {
+			endIdx = i
+			break
+		}
+	}
+	if endIdx == -1 {
+		return ""
+	}
+
+	for i := 1; i < endIdx; i++ {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "goal:") {
+			value := strings.TrimSpace(strings.TrimPrefix(line, "goal:"))
+			return strings.Trim(value, "\"'")
+		}
+	}
+
+	return ""
 }
 
 // SetupWorktreeOpts configures worktree creation behavior.
