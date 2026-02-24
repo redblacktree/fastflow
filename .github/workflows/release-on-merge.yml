@@ -50,29 +50,27 @@ jobs:
 
       - name: Generate release notes
         id: gen_notes
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          LATEST_TAG: ${{ steps.get_latest_tag.outputs.latest_tag }}
+          NEW_VERSION: ${{ steps.calc_version.outputs.new_version }}
+          REPO: ${{ github.repository }}
         run: |
-          pr_title="${{ github.event.pull_request.title }}"
-          pr_body="${{ github.event.pull_request.body }}"
-          pr_number="${{ github.event.pull_request.number }}"
-          pr_author="${{ github.event.pull_request.user.login }}"
-          
-          # Create release notes file
-          cat > release_notes.md << EOF
-          ## What's Changed
-          
-          ### PR #$pr_number: $pr_title
-          
-          **Author:** @$pr_author
-          
-          ---
-          
-          $pr_body
-          
-          ---
-          
-          **Full Changelog:** https://github.com/${{ github.repository }}/compare/${{ steps.get_latest_tag.outputs.latest_tag }}...${{ steps.calc_version.outputs.new_version }}
-          EOF
-          
+          # Use printf with env vars to avoid backticks in PR body being interpreted as
+          # shell command substitutions when embedded directly in an unquoted heredoc.
+          {
+            printf '## What'\''s Changed\n\n'
+            printf '### PR #%s: %s\n\n' "$PR_NUMBER" "$PR_TITLE"
+            printf '**Author:** @%s\n\n' "$PR_AUTHOR"
+            printf -- '---\n\n'
+            printf '%s\n\n' "$PR_BODY"
+            printf -- '---\n\n'
+            printf '**Full Changelog:** https://github.com/%s/compare/%s...%s\n' "$REPO" "$LATEST_TAG" "$NEW_VERSION"
+          } > release_notes.md
+
           echo "Release notes created"
 
       - name: Create and push new tag
