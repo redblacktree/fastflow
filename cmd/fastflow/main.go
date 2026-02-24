@@ -85,7 +85,13 @@ Examples:
   fastflow run --goal "Fix typo" --ticket ENG-1238 --workflow plan-first
 
   # Skip checkpoints (for CI/automation)
-  fastflow run --goal "Refactor auth" --ticket ENG-1239 --no-review`,
+  fastflow run --goal "Refactor auth" --ticket ENG-1239 --no-review
+
+  # Run a single stage
+  fastflow run --ticket ENG-1240 --stage plan --goal "Implement feature X"
+
+  # Re-run a stage (reads existing goal from run directory)
+  fastflow run --ticket ENG-1240 --stage plan`,
 	RunE: runRun,
 }
 
@@ -161,6 +167,7 @@ var (
 	flagGoalFile    string
 	flagTicket      string
 	flagWorkflow    string
+	flagStage       string
 	flagNoReview    bool
 	flagConfigPath  string
 	flagDryRun      bool
@@ -195,6 +202,7 @@ func init() {
 	runCmd.Flags().StringVar(&flagGoalFile, "goal-file", "", "Path to file containing goal description")
 	runCmd.Flags().StringVar(&flagTicket, "ticket", "", "Ticket identifier (required)")
 	runCmd.Flags().StringVar(&flagWorkflow, "workflow", "", "Workflow to run (default: from config)")
+	runCmd.Flags().StringVar(&flagStage, "stage", "", "Run a single named stage (mutually exclusive with --workflow)")
 	runCmd.Flags().BoolVar(&flagNoReview, "no-review", false, "Skip checkpoint pauses")
 	runCmd.Flags().StringVar(&flagConfigPath, "config", "", "Path to config file (default: orchestrator.json)")
 	runCmd.Flags().BoolVar(&flagDryRun, "dry-run", false, "Show what would run without executing")
@@ -384,20 +392,38 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("%s %s", errColor("ERROR"), result.Error())
 	}
 
-	// Get the workflow to check if it requires a goal
-	workflowName := flagWorkflow
-	if workflowName == "" {
-		workflowName = cfg.DefaultWorkflow
-	}
-	workflow, err := cfg.GetWorkflow(workflowName)
-	if err != nil {
-		return fmt.Errorf("%s %w", errColor("ERROR"), err)
+	// Handle --stage flag (mutually exclusive with --workflow)
+	if flagStage != "" {
+		if flagWorkflow != "" {
+			return fmt.Errorf("%s --stage and --workflow are mutually exclusive", errColor("ERROR"))
+		}
+		// Validate stage exists
+		if _, err := cfg.GetStage(flagStage); err != nil {
+			available := cfg.StageNames()
+			return fmt.Errorf("%s stage %q not found (available stages: %s)",
+				errColor("ERROR"), flagStage, strings.Join(available, ", "))
+		}
 	}
 
-	// Validate dependencies
-	depResult := config.ValidateDependencies(cfg)
-	if !depResult.IsValid() {
-		return fmt.Errorf("%s %s", errColor("ERROR"), depResult.Error())
+	// Workflow resolution — only when NOT in --stage mode
+	var workflow *config.Workflow
+	if flagStage == "" {
+		workflowName := flagWorkflow
+		if workflowName == "" {
+			workflowName = cfg.DefaultWorkflow
+		}
+		workflow, err = cfg.GetWorkflow(workflowName)
+		if err != nil {
+			return fmt.Errorf("%s %w", errColor("ERROR"), err)
+		}
+	}
+
+	// Validate dependencies (skip for --stage since we only need one stage)
+	if flagStage == "" {
+		depResult := config.ValidateDependencies(cfg)
+		if !depResult.IsValid() {
+			return fmt.Errorf("%s %s", errColor("ERROR"), depResult.Error())
+		}
 	}
 
 	// Get current working directory
@@ -453,9 +479,26 @@ func runRun(cmd *cobra.Command, args []string) error {
 	// Compute run directory (needs workDir from worktree setup)
 	runDir := runner.GetRunDir(workDir, flagTicket)
 
-	// Resolve goal from various input sources (unless workflow skips goal)
+	// Resolve goal from various input sources
 	var goal string
-	if !workflow.SkipGoal {
+	if flagStage != "" {
+		// Goal is optional for --stage mode — don't prompt interactively
+		if flagGoal != "" {
+			goal = flagGoal
+		} else if flagGoalFile != "" {
+			goal, err = readGoalFile(flagGoalFile)
+			if err != nil {
+				return fmt.Errorf("%s Failed to get goal: %w", errColor("ERROR"), err)
+			}
+		} else {
+			// Check piped stdin
+			stat, _ := os.Stdin.Stat()
+			if (stat.Mode() & os.ModeCharDevice) == 0 {
+				goal, _ = readPipedStdin()
+			}
+			// Otherwise goal stays empty — that's OK for --stage
+		}
+	} else if !workflow.SkipGoal {
 		goal, err = resolveGoal(runDir)
 		if err != nil {
 			return fmt.Errorf("%s Failed to get goal: %w", errColor("ERROR"), err)
@@ -467,6 +510,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 		Goal:       goal,
 		Ticket:     flagTicket,
 		Workflow:   flagWorkflow,
+		Stage:      flagStage,
 		WorkDir:    workDir,
 		RunDir:     runDir,
 		RepoPath:   cwd,
@@ -482,6 +526,9 @@ func runRun(cmd *cobra.Command, args []string) error {
 	r.Interactive = flagInteractive
 	r.Verbose = flagVerbose
 
+	if ctx.Stage != "" {
+		return r.RunSingleStage(ctx)
+	}
 	return r.Run(ctx)
 }
 

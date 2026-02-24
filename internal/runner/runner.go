@@ -43,6 +43,7 @@ type RunContext struct {
 	Goal       string
 	Ticket     string
 	Workflow   string
+	Stage      string // Single stage to run (mutually exclusive with Workflow)
 	WorkDir    string
 	RunDir     string
 	RepoPath   string
@@ -261,6 +262,81 @@ func (r *Runner) Run(ctx *RunContext) error {
 		output.Printf("    %s Failed to update status: %v\n", warning("WARN"), err)
 	}
 	output.Printf("\n%s Pipeline completed successfully!\n", success("SUCCESS"))
+	return nil
+}
+
+// RunSingleStage executes a single named stage without workflow state tracking.
+// The stage runs exactly once — no judge retry loop, no resume state.
+// Checkpoint behavior still applies if the stage has checkpoint: true.
+func (r *Runner) RunSingleStage(ctx *RunContext) error {
+	stageName := ctx.Stage
+	stage, err := r.Config.GetStage(stageName)
+	if err != nil {
+		return err
+	}
+
+	info := color.New(color.FgCyan).SprintFunc()
+	success := color.New(color.FgGreen).SprintFunc()
+	errColor := color.New(color.FgRed).SprintFunc()
+	bold := color.New(color.Bold).SprintFunc()
+
+	output.Printf("\n%s Running stage: %s\n", info(">>>"), bold(stageName))
+	output.Printf("    Ticket: %s\n", ctx.Ticket)
+	output.Printf("    Working directory: %s\n", ctx.WorkDir)
+	output.Printf("    Run directory: %s\n", ctx.RunDir)
+	if ctx.Goal != "" {
+		output.Printf("    Goal: %s\n", ctx.Goal)
+	}
+	output.Println()
+
+	// Create the run directory
+	if err := os.MkdirAll(ctx.RunDir, 0755); err != nil {
+		return fmt.Errorf("failed to create run directory: %w", err)
+	}
+
+	// Write goal file only if goal is provided (preserve existing goal.md)
+	if ctx.Goal != "" {
+		if err := r.writeGoalFile(ctx); err != nil {
+			return fmt.Errorf("failed to write goal file: %w", err)
+		}
+	}
+
+	if r.DryRun {
+		output.Printf("    [DRY RUN] Would execute stage: %s\n", stageName)
+		return nil
+	}
+
+	// Execute the stage
+	result, err := r.executeStage(ctx, stageName, stage)
+	if err != nil {
+		output.Printf("    %s Stage failed: %v\n", errColor("ERROR"), err)
+		return err
+	}
+
+	// Run judge evaluation (single pass — no retries for single-stage mode)
+	judgeResult, err := r.evaluateStage(ctx, stageName, stage, result)
+	if err != nil {
+		output.Printf("    %s Judge evaluation failed: %v\n", errColor("ERROR"), err)
+		return err
+	}
+
+	if !judgeResult.Success {
+		output.Printf("    %s Stage did not pass evaluation\n", errColor("FAILED"))
+		output.Printf("    Reason: %s\n", judgeResult.Reasoning)
+		return fmt.Errorf("stage %s failed evaluation: %s", stageName, judgeResult.Reasoning)
+	}
+
+	output.Printf("    %s Stage completed successfully\n", success("PASS"))
+	output.Printf("    %s\n", judgeResult.Reasoning)
+
+	// Handle checkpoint (still applies in single-stage mode)
+	if stage.Checkpoint && !r.NoReview {
+		if err := r.handleCheckpoint(ctx, stageName); err != nil {
+			return err
+		}
+	}
+
+	output.Printf("\n%s Stage %s completed!\n", success("SUCCESS"), bold(stageName))
 	return nil
 }
 

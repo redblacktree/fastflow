@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 // Config is the top-level orchestrator configuration.
@@ -105,5 +106,15 @@ func workflowNames(workflows map[string]Workflow) []string {
 	for name := range workflows {
 		names = append(names, name)
 	}
+	return names
+}
+
+// StageNames returns a sorted list of all stage names in the config.
+func (c *Config) StageNames() []string {
+	names := make([]string, 0, len(c.Stages))
+	for name := range c.Stages {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	return names
 }
