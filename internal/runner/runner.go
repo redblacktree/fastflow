@@ -98,7 +98,10 @@ func (r *Runner) Run(ctx *RunContext) error {
 
 	// Initialize or use existing state
 	if pipelineState == nil {
-		pipelineState = state.NewState(ctx.Workflow, workflow.Stages)
+		pipelineState = state.NewState(ctx.Workflow, workflow.Stages, ctx.Ticket, ctx.WorkDir)
+		if err := pipelineState.Save(ctx.RunDir); err != nil {
+			return fmt.Errorf("failed to save initial state: %w", err)
+		}
 	}
 
 	// Write the goal file (always, to ensure it's current)
@@ -129,6 +132,10 @@ func (r *Runner) Run(ctx *RunContext) error {
 
 		output.Printf("%s Stage %d/%d: %s\n", info(">>>"), i+1, len(workflow.Stages), bold(stageName))
 
+		if err := pipelineState.SetStage(ctx.RunDir, stageName); err != nil {
+			output.Printf("    %s Failed to update stage: %v\n", warning("WARN"), err)
+		}
+
 		if r.DryRun {
 			output.Printf("    [DRY RUN] Would execute stage: %s\n", stageName)
 			continue
@@ -138,6 +145,7 @@ func (r *Runner) Run(ctx *RunContext) error {
 		result, err := r.executeStage(ctx, stageName, stage)
 		if err != nil {
 			output.Printf("    %s Stage failed: %v\n", errColor("ERROR"), err)
+			pipelineState.SetStatus(ctx.RunDir, state.StatusFailed) //nolint:errcheck
 			return err
 		}
 
@@ -145,6 +153,7 @@ func (r *Runner) Run(ctx *RunContext) error {
 		judgeResult, err := r.evaluateStage(ctx, stageName, stage, result)
 		if err != nil {
 			output.Printf("    %s Judge evaluation failed: %v\n", errColor("ERROR"), err)
+			pipelineState.SetStatus(ctx.RunDir, state.StatusFailed) //nolint:errcheck
 			return err
 		}
 
@@ -191,6 +200,7 @@ func (r *Runner) Run(ctx *RunContext) error {
 		if judgeResult.Interactive && interactionAttempts >= maxInteractionAttempts {
 			output.Printf("    %s Max interaction attempts (%d) reached\n",
 				warning("WARN"), maxInteractionAttempts)
+			pipelineState.SetStatus(ctx.RunDir, state.StatusFailed) //nolint:errcheck
 			return fmt.Errorf("stage %s still requires input after %d attempts: %s",
 				stageName, maxInteractionAttempts, judgeResult.Reasoning)
 		}
@@ -220,6 +230,7 @@ func (r *Runner) Run(ctx *RunContext) error {
 		if !judgeResult.Success {
 			output.Printf("    %s Stage did not pass evaluation after %d retries\n", errColor("FAILED"), maxEvalRetries)
 			output.Printf("    Reason: %s\n", judgeResult.Reasoning)
+			pipelineState.SetStatus(ctx.RunDir, state.StatusFailed) //nolint:errcheck
 			return fmt.Errorf("stage %s failed evaluation: %s", stageName, judgeResult.Reasoning)
 		}
 
@@ -233,12 +244,22 @@ func (r *Runner) Run(ctx *RunContext) error {
 
 		// Handle checkpoint
 		if stage.Checkpoint && !r.NoReview {
+			if err := pipelineState.SetStatus(ctx.RunDir, state.StatusCheckpoint); err != nil {
+				output.Printf("    %s Failed to update status: %v\n", warning("WARN"), err)
+			}
 			if err := r.handleCheckpoint(ctx, stageName); err != nil {
 				return err
+			}
+			// Restore running status after checkpoint resumes
+			if err := pipelineState.SetStatus(ctx.RunDir, state.StatusRunning); err != nil {
+				output.Printf("    %s Failed to update status: %v\n", warning("WARN"), err)
 			}
 		}
 	}
 
+	if err := pipelineState.SetStatus(ctx.RunDir, state.StatusComplete); err != nil {
+		output.Printf("    %s Failed to update status: %v\n", warning("WARN"), err)
+	}
 	output.Printf("\n%s Pipeline completed successfully!\n", success("SUCCESS"))
 	return nil
 }
