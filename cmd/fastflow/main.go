@@ -14,6 +14,7 @@ import (
 	"github.com/redblacktree/fastflow/internal/config"
 	"github.com/redblacktree/fastflow/internal/output"
 	"github.com/redblacktree/fastflow/internal/runner"
+	"github.com/redblacktree/fastflow/internal/state"
 	"github.com/redblacktree/fastflow/internal/templates"
 	"github.com/redblacktree/fastflow/internal/worktree"
 	"github.com/fatih/color"
@@ -122,11 +123,13 @@ Examples:
 
 var listCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List worktrees and tickets",
-	Long: `List all worktrees for the current repository with their ticket summaries.
+	Short: "List runs and their status",
+	Long: `List all runs for the current repository with their status and ticket summaries.
+
+Shows both worktree-based runs and runs started with --no-worktree.
 
 Examples:
-  # List all worktrees
+  # List all runs
   fastflow list
 
   # List only tickets matching a prefix
@@ -667,91 +670,154 @@ func runList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	// Create worktree manager
-	mgr, err := worktree.NewManager(cwd)
-	if err != nil {
-		return fmt.Errorf("failed to create worktree manager: %w", err)
+	// --- Source 1: Worktree-based runs ---
+	type listEntry struct {
+		Ticket  string
+		Status  string
+		Stage   string
+		Created string
+		Summary string
 	}
 
-	// List worktrees
-	worktrees, err := mgr.List()
-	if err != nil {
-		return fmt.Errorf("failed to list worktrees: %w", err)
+	seen := make(map[string]bool)
+	var entries []listEntry
+
+	mgr, err := worktree.NewManager(cwd)
+	if err == nil {
+		worktrees, err := mgr.List()
+		if err == nil {
+			for _, wt := range worktrees {
+				status := "active"
+				if wt.IsOrphan {
+					status = "orphaned"
+				}
+
+				created := ""
+				summary := dim("(no goal file)")
+				stage := ""
+
+				// Try to read ticket info from goal.md
+				for _, loc := range []string{wt.Path, cwd} {
+					if info := worktree.ReadTicketInfo(loc, wt.Ticket); info != nil {
+						if info.Created != "" {
+							created = info.Created
+							if len(created) > 19 {
+								created = created[:19]
+							}
+							created = strings.Replace(created, "T", " ", 1)
+						}
+						if info.Goal != "" {
+							summary = info.Goal
+							if len(summary) > 40 {
+								summary = summary[:37] + "..."
+							}
+						}
+						break
+					}
+				}
+
+				// Try to read state.json for richer status
+				runDir := runner.GetRunDir(wt.Path, wt.Ticket)
+				if st, loadErr := state.Load(runDir); loadErr == nil && st != nil && st.Status != "" {
+					status = st.Status
+					stage = st.Stage
+				}
+
+				entries = append(entries, listEntry{
+					Ticket:  wt.Ticket,
+					Status:  status,
+					Stage:   stage,
+					Created: created,
+					Summary: summary,
+				})
+				seen[wt.Ticket] = true
+			}
+		}
+	}
+
+	// --- Source 2: State-based runs (non-worktree) from current repo ---
+	stateRuns, _ := state.ScanRunDirs(cwd)
+	for _, run := range stateRuns {
+		if seen[run.Ticket] {
+			continue // Already listed via worktree
+		}
+
+		status := run.State.Status
+		if status == "" {
+			status = "unknown"
+		}
+		stage := run.State.Stage
+		created := ""
+		summary := dim("(no goal file)")
+
+		// Read goal info
+		if info := worktree.ReadTicketInfo(cwd, run.Ticket); info != nil {
+			if info.Created != "" {
+				created = info.Created
+				if len(created) > 19 {
+					created = created[:19]
+				}
+				created = strings.Replace(created, "T", " ", 1)
+			}
+			if info.Goal != "" {
+				summary = info.Goal
+				if len(summary) > 40 {
+					summary = summary[:37] + "..."
+				}
+			}
+		}
+
+		entries = append(entries, listEntry{
+			Ticket:  run.Ticket,
+			Status:  status,
+			Stage:   stage,
+			Created: created,
+			Summary: summary,
+		})
+		seen[run.Ticket] = true
 	}
 
 	// Filter by prefix if specified
 	if flagListPrefix != "" {
-		var filtered []worktree.WorktreeInfo
-		for _, wt := range worktrees {
-			if strings.HasPrefix(wt.Ticket, flagListPrefix) {
-				filtered = append(filtered, wt)
+		var filtered []listEntry
+		for _, e := range entries {
+			if strings.HasPrefix(e.Ticket, flagListPrefix) {
+				filtered = append(filtered, e)
 			}
 		}
-		worktrees = filtered
+		entries = filtered
 	}
 
-	if len(worktrees) == 0 {
+	if len(entries) == 0 {
 		if flagListPrefix != "" {
-			output.Printf("No worktrees found matching prefix: %s\n", flagListPrefix)
+			output.Printf("No runs found matching prefix: %s\n", flagListPrefix)
 		} else {
-			output.Printf("No worktrees found for repository: %s\n", mgr.RepoName)
+			output.Printf("No runs found.\n")
 		}
 		return nil
 	}
 
 	// Print header
-	output.Printf("%s  %s  %s  %s\n",
+	output.Printf("%s  %s  %s  %s  %s\n",
 		bold(fmt.Sprintf("%-12s", "Ticket")),
-		bold(fmt.Sprintf("%-10s", "Status")),
+		bold(fmt.Sprintf("%-12s", "Status")),
+		bold(fmt.Sprintf("%-12s", "Stage")),
 		bold(fmt.Sprintf("%-20s", "Created")),
 		bold("Summary"))
-	output.Printf("%s  %s  %s  %s\n",
+	output.Printf("%s  %s  %s  %s  %s\n",
 		strings.Repeat("─", 12),
-		strings.Repeat("─", 10),
+		strings.Repeat("─", 12),
+		strings.Repeat("─", 12),
 		strings.Repeat("─", 20),
 		strings.Repeat("─", 40))
 
-	// Print each worktree
-	for _, wt := range worktrees {
-		status := "active"
-		if wt.IsOrphan {
-			status = "orphaned"
-		}
-
-		// Try to get ticket info from goal file
-		created := ""
-		summary := dim("(no goal file)")
-
-		// Check multiple possible locations for goal file
-		goalLocations := []string{
-			wt.Path, // Check in the worktree itself
-			cwd,     // Check in current directory
-		}
-
-		for _, loc := range goalLocations {
-			if info := worktree.ReadTicketInfo(loc, wt.Ticket); info != nil {
-				if info.Created != "" {
-					// Parse and format the timestamp
-					created = info.Created
-					if len(created) > 19 {
-						created = created[:19] // Trim timezone for display
-					}
-					created = strings.Replace(created, "T", " ", 1)
-				}
-				if info.Goal != "" {
-					summary = info.Goal
-					if len(summary) > 40 {
-						summary = summary[:37] + "..."
-					}
-				}
-				break
-			}
-		}
-
-		output.Printf("%-12s  %-10s  %-20s  %s\n", wt.Ticket, status, created, summary)
+	// Print each entry
+	for _, e := range entries {
+		output.Printf("%-12s  %-12s  %-12s  %-20s  %s\n",
+			e.Ticket, e.Status, e.Stage, e.Created, e.Summary)
 	}
 
-	output.Printf("\n%d worktree(s) found\n", len(worktrees))
+	output.Printf("\n%d run(s) found\n", len(entries))
 	return nil
 }
 
