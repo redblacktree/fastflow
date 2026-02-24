@@ -17,6 +17,27 @@ func isNotLoggedIn(output string) bool {
 		strings.Contains(output, "Please run /login")
 }
 
+// ErrInvalidAPIKey is returned when the API key is set but rejected by the API.
+var ErrInvalidAPIKey = fmt.Errorf("ANTHROPIC_API_KEY is set but was rejected by the API")
+
+// isInvalidAPIKey checks if the output indicates an API key was rejected.
+func isInvalidAPIKey(output string) bool {
+	return strings.Contains(output, "invalid x-api-key") ||
+		strings.Contains(output, "authentication_error") ||
+		strings.Contains(output, "Invalid API key")
+}
+
+// envWithoutAPIKey returns a copy of the current environment with ANTHROPIC_API_KEY removed.
+func envWithoutAPIKey() []string {
+	var filtered []string
+	for _, env := range os.Environ() {
+		if !strings.HasPrefix(env, "ANTHROPIC_API_KEY=") {
+			filtered = append(filtered, env)
+		}
+	}
+	return filtered
+}
+
 // Result represents the outcome of a judge evaluation.
 type Result struct {
 	Success     bool
@@ -47,7 +68,28 @@ func NewJudge(model string) *Judge {
 }
 
 // Evaluate runs the judge evaluation for a completed stage.
+// If ANTHROPIC_API_KEY is set but rejected, it retries without the key.
 func (j *Judge) Evaluate(ctx *EvaluationContext) (*Result, error) {
+	result, outputStr, err := j.evaluate(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// If API key was rejected and is set in env, retry without it
+	if isInvalidAPIKey(outputStr) && os.Getenv("ANTHROPIC_API_KEY") != "" {
+		fmt.Fprintf(os.Stderr, "WARNING: ANTHROPIC_API_KEY is set but was rejected (judge). Falling back to claude.ai session.\n")
+		retryResult, _, retryErr := j.evaluate(ctx, envWithoutAPIKey())
+		if retryErr != nil {
+			return nil, fmt.Errorf("judge fallback also failed: %w (original: ANTHROPIC_API_KEY rejected)", retryErr)
+		}
+		return retryResult, nil
+	}
+
+	return result, nil
+}
+
+// evaluate is the internal implementation that runs the judge with an optional env override.
+func (j *Judge) evaluate(ctx *EvaluationContext, env []string) (*Result, string, error) {
 	prompt := j.buildPrompt(ctx)
 
 	args := []string{
@@ -64,6 +106,9 @@ func (j *Judge) Evaluate(ctx *EvaluationContext) (*Result, error) {
 
 	// Run Claude with the judge prompt
 	cmd := exec.Command("claude", args...)
+	if env != nil {
+		cmd.Env = env
+	}
 
 	output, err := cmd.CombinedOutput()
 
@@ -78,14 +123,15 @@ func (j *Judge) Evaluate(ctx *EvaluationContext) (*Result, error) {
 
 	// Detect authentication failure before treating as generic error
 	if isNotLoggedIn(outputStr) {
-		return nil, ErrNotLoggedIn
+		return nil, outputStr, ErrNotLoggedIn
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("judge evaluation failed: %w\nOutput: %s", err, outputStr)
+		return nil, outputStr, fmt.Errorf("judge evaluation failed: %w\nOutput: %s", err, outputStr)
 	}
 
-	return j.parseResponse(outputStr)
+	result, parseErr := j.parseResponse(outputStr)
+	return result, outputStr, parseErr
 }
 
 // EvaluationContext contains all the information the judge needs to evaluate a stage.
