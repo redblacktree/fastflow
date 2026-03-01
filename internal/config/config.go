@@ -9,6 +9,11 @@ import (
 	"sort"
 )
 
+// Defaults holds global default settings that can be overridden per-stage.
+type Defaults struct {
+	MaxBudgetUsd float64 `json:"maxBudgetUsd,omitempty"`
+}
+
 // Config is the top-level orchestrator configuration.
 type Config struct {
 	Workflows          map[string]Workflow `json:"workflows"`
@@ -16,6 +21,7 @@ type Config struct {
 	DefaultWorkflow    string              `json:"default_workflow"`
 	DefaultJudgePrompt string              `json:"default_judge_prompt"`
 	JudgeModel         string              `json:"judge_model"`
+	Defaults           Defaults            `json:"defaults,omitempty"`
 }
 
 // Workflow defines a named workflow as a sequence of stages.
@@ -28,12 +34,22 @@ type Workflow struct {
 
 // Stage defines a pipeline stage configuration.
 type Stage struct {
-	PromptFile  string   `json:"prompt_file,omitempty"`
-	Skill       string   `json:"skill,omitempty"`
-	Requires    []string `json:"requires,omitempty"`
-	Model       string   `json:"model,omitempty"`
-	Checkpoint  bool     `json:"checkpoint,omitempty"`
-	JudgePrompt string   `json:"judge_prompt,omitempty"`
+	PromptFile   string   `json:"prompt_file,omitempty"`
+	Skill        string   `json:"skill,omitempty"`
+	Requires     []string `json:"requires,omitempty"`
+	Model        string   `json:"model,omitempty"`
+	Checkpoint   bool     `json:"checkpoint,omitempty"`
+	JudgePrompt  string   `json:"judge_prompt,omitempty"`
+	MaxBudgetUsd *float64 `json:"maxBudgetUsd,omitempty"`
+}
+
+// EffectiveBudget returns the maxBudgetUsd for a stage, falling back to the
+// global default. Returns 0 if no budget is configured.
+func (c *Config) EffectiveBudget(stage *Stage) float64 {
+	if stage.MaxBudgetUsd != nil {
+		return *stage.MaxBudgetUsd
+	}
+	return c.Defaults.MaxBudgetUsd
 }
 
 // Load reads and parses a config file from the given path.
