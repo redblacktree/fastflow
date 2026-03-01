@@ -103,6 +103,16 @@ func (c *ClaudeInvoker) invokeWithEnv(prompt string, model string, env []string)
 		if isNotLoggedIn(result.RawOutput) {
 			return nil, ErrNotLoggedIn
 		}
+		if isRateLimited(result.RawOutput) {
+			return nil, ErrRateLimited
+		}
+		if result.ExitCode != 0 && result.Output == "" {
+			snippet := strings.TrimSpace(result.RawOutput)
+			if len(snippet) > 300 {
+				snippet = snippet[len(snippet)-300:]
+			}
+			return nil, fmt.Errorf("claude exited with code %d: %s", result.ExitCode, snippet)
+		}
 		result.HitMaxTurns = isMaxTurnsError(result.Output)
 		if c.Debug && result.HitMaxTurns {
 			output.Printf("[DEBUG] Max turns limit detected in output\n")
@@ -144,6 +154,20 @@ func (c *ClaudeInvoker) invokeWithEnv(prompt string, model string, env []string)
 		return nil, ErrNotLoggedIn
 	}
 
+	// Detect rate limit
+	if isRateLimited(result.RawOutput) {
+		return nil, ErrRateLimited
+	}
+
+	// Treat non-zero exit with no usable output as a failure
+	if result.ExitCode != 0 && result.Output == "" {
+		snippet := strings.TrimSpace(result.RawOutput)
+		if len(snippet) > 300 {
+			snippet = snippet[len(snippet)-300:]
+		}
+		return nil, fmt.Errorf("claude exited with code %d: %s", result.ExitCode, snippet)
+	}
+
 	// Detect if max-turns was hit
 	result.HitMaxTurns = isMaxTurnsError(result.Output)
 	if c.Debug && result.HitMaxTurns {
@@ -166,6 +190,16 @@ var ErrNotLoggedIn = fmt.Errorf("claude is not logged in: please run 'claude' in
 func isNotLoggedIn(output string) bool {
 	return strings.Contains(output, "Not logged in") ||
 		strings.Contains(output, "Please run /login")
+}
+
+// ErrRateLimited is returned when Claude CLI reports a rate limit was hit.
+var ErrRateLimited = fmt.Errorf("claude rate limit reached: please wait before retrying")
+
+// isRateLimited checks if the output indicates a rate limit was hit.
+func isRateLimited(out string) bool {
+	lower := strings.ToLower(out)
+	return strings.Contains(lower, "you've hit your limit") ||
+		strings.Contains(lower, "rate limit")
 }
 
 // ErrInvalidAPIKey is returned when the API key is set but rejected by the API.
