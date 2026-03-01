@@ -1,10 +1,82 @@
 package runner
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
 )
+
+func TestClaudeJSONResultParsing(t *testing.T) {
+	tests := []struct {
+		name          string
+		jsonStr       string
+		wantSubtype   string
+		wantBudgetCap bool
+		wantMaxTurns  bool
+		wantResult    string
+		wantSessionID string
+		wantCost      float64
+	}{
+		{
+			name:          "success",
+			jsonStr:       `{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"abc","total_cost_usd":0.50}`,
+			wantSubtype:   "success",
+			wantBudgetCap: false,
+			wantMaxTurns:  false,
+			wantResult:    "done",
+			wantSessionID: "abc",
+			wantCost:      0.50,
+		},
+		{
+			name:          "budget exhausted",
+			jsonStr:       `{"type":"result","subtype":"error_max_budget_usd","is_error":true,"session_id":"def","total_cost_usd":5.01}`,
+			wantSubtype:   "error_max_budget_usd",
+			wantBudgetCap: true,
+			wantMaxTurns:  false,
+			wantResult:    "",
+			wantSessionID: "def",
+			wantCost:      5.01,
+		},
+		{
+			name:          "max turns",
+			jsonStr:       `{"type":"result","subtype":"error_max_turns","is_error":true,"result":"partial","session_id":"ghi","total_cost_usd":2.00}`,
+			wantSubtype:   "error_max_turns",
+			wantBudgetCap: false,
+			wantMaxTurns:  true,
+			wantResult:    "partial",
+			wantSessionID: "ghi",
+			wantCost:      2.00,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var result claudeJSONResult
+			if err := json.Unmarshal([]byte(tt.jsonStr), &result); err != nil {
+				t.Fatalf("Unmarshal failed: %v", err)
+			}
+			if result.Subtype != tt.wantSubtype {
+				t.Errorf("Subtype = %q, want %q", result.Subtype, tt.wantSubtype)
+			}
+			if (result.Subtype == subtypeBudgetExhausted) != tt.wantBudgetCap {
+				t.Errorf("budget cap detection = %v, want %v", result.Subtype == subtypeBudgetExhausted, tt.wantBudgetCap)
+			}
+			if (result.Subtype == subtypeMaxTurns) != tt.wantMaxTurns {
+				t.Errorf("max turns detection = %v, want %v", result.Subtype == subtypeMaxTurns, tt.wantMaxTurns)
+			}
+			if result.Result != tt.wantResult {
+				t.Errorf("Result = %q, want %q", result.Result, tt.wantResult)
+			}
+			if result.SessionID != tt.wantSessionID {
+				t.Errorf("SessionID = %q, want %q", result.SessionID, tt.wantSessionID)
+			}
+			if result.TotalCostUsd != tt.wantCost {
+				t.Errorf("TotalCostUsd = %v, want %v", result.TotalCostUsd, tt.wantCost)
+			}
+		})
+	}
+}
 
 func TestIsInvalidAPIKey(t *testing.T) {
 	// Should detect API key rejection from JSON error body

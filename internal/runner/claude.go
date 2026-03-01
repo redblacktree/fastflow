@@ -3,6 +3,7 @@ package runner
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -18,6 +19,8 @@ type ClaudeInvoker struct {
 	WorkDir string
 	// MaxTurns is the maximum number of turns for the Claude CLI.
 	MaxTurns int
+	// MaxBudgetUsd enables --max-budget-usd and --output-format json when > 0.
+	MaxBudgetUsd float64
 	// SkipPermissions enables --dangerously-skip-permissions flag.
 	SkipPermissions bool
 	// Debug enables verbose output logging.
@@ -37,11 +40,33 @@ func NewClaudeInvoker(workDir string) *ClaudeInvoker {
 
 // InvokeResult contains the result of a Claude invocation.
 type InvokeResult struct {
-	Output      string
-	RawOutput   string // Full output for auth detection (includes stderr, non-JSON lines)
-	ExitCode    int
-	HitMaxTurns bool
+	Output       string
+	RawOutput    string  // Full output for auth detection (includes stderr, non-JSON lines)
+	ExitCode     int
+	HitMaxTurns  bool
+	HitBudgetCap bool    // True when budget limit was reached
+	SessionID    string  // Session ID from JSON output (for --continue/--resume)
+	TotalCostUsd float64 // Actual spend from this invocation
 }
+
+// claudeJSONResult represents the JSON output from claude --output-format json.
+type claudeJSONResult struct {
+	Type         string  `json:"type"`
+	Subtype      string  `json:"subtype"`
+	SessionID    string  `json:"session_id"`
+	IsError      bool    `json:"is_error"`
+	Result       string  `json:"result"`
+	DurationMs   int     `json:"duration_ms"`
+	NumTurns     int     `json:"num_turns"`
+	TotalCostUsd float64 `json:"total_cost_usd"`
+}
+
+// Budget/turn exhaustion subtypes from Claude CLI.
+const (
+	subtypeSuccess         = "success"
+	subtypeBudgetExhausted = "error_max_budget_usd"
+	subtypeMaxTurns        = "error_max_turns"
+)
 
 // Invoke runs Claude with the given prompt and model.
 // If ANTHROPIC_API_KEY is set but rejected, it retries without the key.
@@ -73,8 +98,14 @@ func (c *ClaudeInvoker) invokeWithEnv(prompt string, model string, env []string)
 
 	if c.Verbose {
 		args = append(args, "--output-format", "stream-json", "--verbose")
+	} else if c.MaxBudgetUsd > 0 {
+		args = append(args, "--output-format", "json")
 	} else {
 		args = append(args, "--print")
+	}
+
+	if c.MaxBudgetUsd > 0 {
+		args = append(args, "--max-budget-usd", fmt.Sprintf("%.2f", c.MaxBudgetUsd))
 	}
 
 	if c.SkipPermissions {
@@ -113,9 +144,21 @@ func (c *ClaudeInvoker) invokeWithEnv(prompt string, model string, env []string)
 			}
 			return nil, fmt.Errorf("claude exited with code %d: %s", result.ExitCode, snippet)
 		}
-		result.HitMaxTurns = isMaxTurnsError(result.Output)
+		result.HitMaxTurns = result.HitMaxTurns || isMaxTurnsError(result.Output)
 		if c.Debug && result.HitMaxTurns {
 			output.Printf("[DEBUG] Max turns limit detected in output\n")
+		}
+		return result, nil
+	}
+
+	if c.MaxBudgetUsd > 0 {
+		// JSON output path: capture and parse structured result
+		result, err := c.runWithJSONParsing(cmd)
+		if err != nil {
+			return nil, err
+		}
+		if isNotLoggedIn(result.RawOutput) {
+			return nil, ErrNotLoggedIn
 		}
 		return result, nil
 	}
@@ -175,6 +218,87 @@ func (c *ClaudeInvoker) invokeWithEnv(prompt string, model string, env []string)
 	}
 
 	return result, nil
+}
+
+// runWithJSONParsing runs Claude with --output-format json and parses the result.
+// stdout is captured silently; only the extracted result text is printed.
+func (c *ClaudeInvoker) runWithJSONParsing(cmd *exec.Cmd) (*InvokeResult, error) {
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = io.MultiWriter(output.Writer, &stderrBuf)
+
+	err := cmd.Run()
+
+	result := &InvokeResult{
+		RawOutput: stdoutBuf.String() + stderrBuf.String(),
+	}
+
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
+		} else {
+			return nil, fmt.Errorf("failed to run claude: %w", err)
+		}
+	}
+
+	// Parse JSON output
+	jsonOutput := strings.TrimSpace(stdoutBuf.String())
+	if jsonOutput != "" {
+		var jsonResult claudeJSONResult
+		if parseErr := json.Unmarshal([]byte(jsonOutput), &jsonResult); parseErr == nil {
+			result.Output = jsonResult.Result
+			result.SessionID = jsonResult.SessionID
+			result.TotalCostUsd = jsonResult.TotalCostUsd
+			result.HitBudgetCap = jsonResult.Subtype == subtypeBudgetExhausted
+			result.HitMaxTurns = jsonResult.Subtype == subtypeMaxTurns
+
+			if c.Debug {
+				output.Printf("[DEBUG] JSON result: subtype=%s, cost=$%.4f, turns=%d\n",
+					jsonResult.Subtype, jsonResult.TotalCostUsd, jsonResult.NumTurns)
+			}
+
+			// Print the text result for user visibility
+			if result.Output != "" {
+				fmt.Fprint(output.Writer, result.Output)
+			}
+		} else {
+			if c.Debug {
+				output.Printf("[DEBUG] Failed to parse JSON output: %v\n", parseErr)
+			}
+			// Fall back to raw output with text-based detection
+			result.Output = jsonOutput
+			result.HitMaxTurns = isMaxTurnsError(jsonOutput)
+		}
+	}
+
+	return result, nil
+}
+
+// InvokeContinue runs Claude with --continue to resume the most recent session.
+// Used for budget-based handoff: asks the exhausted session to write a handoff doc.
+func (c *ClaudeInvoker) InvokeContinue(prompt string, model string) (*InvokeResult, error) {
+	args := []string{
+		"--continue",
+		"--model", model,
+		"--max-turns", fmt.Sprintf("%d", c.MaxTurns),
+		"--output-format", "json",
+		"--max-budget-usd", "1.00",
+	}
+
+	if c.SkipPermissions {
+		args = append(args, "--dangerously-skip-permissions")
+	}
+
+	args = append(args, prompt)
+
+	if c.Debug {
+		output.Printf("[DEBUG] Claude continue command: claude %v\n", args[:len(args)-1])
+	}
+
+	cmd := exec.Command("claude", args...)
+	cmd.Dir = c.WorkDir
+
+	return c.runWithJSONParsing(cmd)
 }
 
 // isMaxTurnsError checks if the output indicates max turns was reached.

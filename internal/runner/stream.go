@@ -16,10 +16,12 @@ import (
 
 // streamEvent represents a single NDJSON line from claude --output-format stream-json.
 type streamEvent struct {
-	Type    string         `json:"type"`    // "system", "assistant", "user", "result"
-	Subtype string         `json:"subtype"` // "init" for system events
-	Message *streamMessage `json:"message"`
-	Result  string         `json:"result"` // final accumulated text (type=="result" only)
+	Type      string         `json:"type"`       // "system", "assistant", "user", "result"
+	Subtype   string         `json:"subtype"`    // "init" for system, stop reason for "result"
+	Message   *streamMessage `json:"message"`
+	Result    string         `json:"result"`     // final accumulated text (type=="result" only)
+	SessionID string         `json:"session_id"` // session ID (type=="result" only)
+	IsError   bool           `json:"is_error"`   // true when result is an error
 }
 
 // streamMessage is the message field within assistant/user events.
@@ -60,6 +62,8 @@ func (c *ClaudeInvoker) runWithStreamParsing(cmd *exec.Cmd) (*InvokeResult, erro
 
 	var finalOutput string
 	var nonJSONLines []string
+	var resultSubtype string
+	var resultSessionID string
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -94,6 +98,8 @@ func (c *ClaudeInvoker) runWithStreamParsing(cmd *exec.Cmd) (*InvokeResult, erro
 
 		case "result":
 			finalOutput = event.Result
+			resultSubtype = event.Subtype
+			resultSessionID = event.SessionID
 		}
 	}
 
@@ -109,8 +115,11 @@ func (c *ClaudeInvoker) runWithStreamParsing(cmd *exec.Cmd) (*InvokeResult, erro
 	allOutput := strings.Join(nonJSONLines, "\n") + "\n" + stderrBuf.String()
 
 	result := &InvokeResult{
-		Output:    finalOutput,
-		RawOutput: allOutput,
+		Output:       finalOutput,
+		RawOutput:    allOutput,
+		HitBudgetCap: resultSubtype == subtypeBudgetExhausted,
+		HitMaxTurns:  resultSubtype == subtypeMaxTurns,
+		SessionID:    resultSessionID,
 	}
 
 	if cmdErr != nil {
