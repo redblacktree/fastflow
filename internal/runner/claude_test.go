@@ -45,6 +45,35 @@ func TestIsNotLoggedIn(t *testing.T) {
 	}
 }
 
+func TestIsRateLimited(t *testing.T) {
+	if !isRateLimited("You've hit your limit for today") {
+		t.Error("should detect \"You've hit your limit\"")
+	}
+	if !isRateLimited("rate limit exceeded, please slow down") {
+		t.Error("should detect \"rate limit\"")
+	}
+	// Case-insensitive
+	if !isRateLimited("Rate Limit Exceeded") {
+		t.Error("should detect \"Rate Limit\" case-insensitively")
+	}
+	// Should NOT trigger on normal output
+	if isRateLimited("Hello, I'm Claude. How can I help you?") {
+		t.Error("should not trigger on normal output")
+	}
+}
+
+func TestIsMaxTurnsError(t *testing.T) {
+	if !isMaxTurnsError("Reached max turns") {
+		t.Error("should detect \"Reached max turns\"")
+	}
+	if !isMaxTurnsError("Error: Reached max turns (50)") {
+		t.Error("should detect \"Error: Reached max turns\"")
+	}
+	if isMaxTurnsError("Task completed successfully") {
+		t.Error("should not trigger on normal output")
+	}
+}
+
 func TestEnvWithoutAPIKey(t *testing.T) {
 	// Set a test API key
 	os.Setenv("ANTHROPIC_API_KEY", "test-key")
