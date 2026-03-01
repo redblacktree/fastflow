@@ -3,6 +3,11 @@
   "judge_model": "haiku",
   "default_judge_prompt": "Did this stage complete successfully? Look for clear evidence in the CLI output that the required work was done. Check for: 1) No obvious errors or failures, 2) The work aligns with the original goal. Respond with YES or NO followed by a brief explanation.",
 
+  "defaults": {
+    "maxBudgetUsd": 0,
+    "_maxBudgetNote": "Set maxBudgetUsd to enable automatic context handoff when budget is exhausted. Pricing basis (as of 2025): Sonnet ~$0.60/context window, Opus ~$3.60/context window. Recommended: 2-5x a single context window cost. Set to 0 to disable."
+  },
+
   "workflows": {
     "full": {
       "description": "Complete workflow: research → plan → implement → validate → commit",
@@ -48,6 +53,7 @@
     "plan": {
       "prompt_file": ".claude/stages/plan.md",
       "model": "opus",
+      "maxBudgetUsd": 10.00,
       "checkpoint": true,
       "requires": [".claude/commands/ff_create_plan.md"],
       "judge_prompt": "Is the plan complete and actionable? Check the CLI output for: 1) A plan was written to thoughts/shared/plans/, 2) It has clear phases with specific changes, 3) It includes success criteria, 4) No open questions remain."

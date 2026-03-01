@@ -3,6 +3,7 @@ package templates
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -106,6 +107,26 @@ func TestWriteForce(t *testing.T) {
 
 	if len(result.Overwritten) == 0 {
 		t.Error("Expected files to be overwritten with force")
+	}
+}
+
+func TestTemplateContainsBudgetConfig(t *testing.T) {
+	dir := t.TempDir()
+	_, err := Write(dir, WriteOptions{Force: true})
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "orchestrator.json"))
+	if err != nil {
+		t.Fatalf("failed to read orchestrator.json: %v", err)
+	}
+
+	if !strings.Contains(string(content), "maxBudgetUsd") {
+		t.Error("orchestrator.json template missing maxBudgetUsd")
+	}
+	if !strings.Contains(string(content), "_maxBudgetNote") {
+		t.Error("orchestrator.json template missing _maxBudgetNote")
 	}
 }
 

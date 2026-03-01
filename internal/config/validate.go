@@ -105,6 +105,22 @@ func Validate(cfg *Config) *ValidationResult {
 				Message: fmt.Sprintf("invalid model %q (must be opus, sonnet, or haiku)", stage.Model),
 			})
 		}
+
+		// Check maxBudgetUsd is non-negative if set
+		if stage.MaxBudgetUsd != nil && *stage.MaxBudgetUsd < 0 {
+			result.Errors = append(result.Errors, ValidationError{
+				Field:   fmt.Sprintf("stages.%s.maxBudgetUsd", name),
+				Message: "maxBudgetUsd must be non-negative",
+			})
+		}
+	}
+
+	// Check defaults
+	if cfg.Defaults.MaxBudgetUsd < 0 {
+		result.Errors = append(result.Errors, ValidationError{
+			Field:   "defaults.maxBudgetUsd",
+			Message: "maxBudgetUsd must be non-negative",
+		})
 	}
 
 	return result

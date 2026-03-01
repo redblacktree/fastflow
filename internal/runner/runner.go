@@ -435,6 +435,7 @@ func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.S
 	invoker := NewClaudeInvoker(ctx.WorkDir)
 	invoker.Debug = r.Debug
 	invoker.Verbose = r.Verbose
+	invoker.MaxBudgetUsd = r.Config.EffectiveBudget(stage)
 
 	model := stage.Model
 	if model == "" {
@@ -488,6 +489,42 @@ func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.S
 			warning("WARN"), r.MaxResumptions)
 	}
 
+	// Handle budget exhaustion with automatic handoff/resume
+	budgetResumptions := 0
+	for result.HitBudgetCap && budgetResumptions < r.MaxResumptions {
+		budgetResumptions++
+		warning := color.New(color.FgYellow).SprintFunc()
+		output.Printf("    %s Budget exhausted ($%.2f), attempting handoff/resume (%d/%d)...\n",
+			warning("BUDGET"), result.TotalCostUsd, budgetResumptions, r.MaxResumptions)
+
+		handoffResult, handoffErr := r.runBudgetHandoffCycle(ctx, stageName, stage, model, invoker)
+		if handoffErr != nil {
+			if r.Debug {
+				output.Printf("[DEBUG] Budget handoff/resume failed: %v\n", handoffErr)
+			}
+			break
+		}
+
+		// Combine outputs
+		result.Output += "\n\n--- [RESUMED AFTER BUDGET EXHAUSTION] ---\n\n" + handoffResult.Output
+		result.HitBudgetCap = handoffResult.HitBudgetCap
+		result.HitMaxTurns = handoffResult.HitMaxTurns
+		result.ExitCode = handoffResult.ExitCode
+		result.TotalCostUsd += handoffResult.TotalCostUsd
+	}
+
+	if result.HitBudgetCap && budgetResumptions >= r.MaxResumptions {
+		warning := color.New(color.FgYellow).SprintFunc()
+		output.Printf("    %s Max budget resumptions (%d) reached, proceeding with partial result\n",
+			warning("WARN"), r.MaxResumptions)
+	}
+
+	// Clean up handoff file after budget handoff cycle
+	if budgetResumptions > 0 {
+		handoffPath := filepath.Join(ctx.WorkDir, ".fastflow", "handoff.md")
+		os.Remove(handoffPath) //nolint:errcheck
+	}
+
 	return result, nil
 }
 
@@ -514,6 +551,81 @@ func (r *Runner) runHandoffCycle(ctx *RunContext, stageName string, model string
 	resumeResult, resumeErr := invoker.InvokeWithSkill("resume_handoff", model, handoffContext)
 	if resumeErr != nil {
 		return nil, fmt.Errorf("resume_handoff failed: %w", resumeErr)
+	}
+
+	return resumeResult, nil
+}
+
+// runBudgetHandoffCycle handles context handoff when budget is exhausted.
+// Step 1: --continue on the same session to write .fastflow/handoff.md
+// Step 2: Fresh session reads the handoff and continues the original task
+func (r *Runner) runBudgetHandoffCycle(ctx *RunContext, stageName string, stage *config.Stage, model string, invoker *ClaudeInvoker) (*InvokeResult, error) {
+	handoffPath := filepath.Join(ctx.WorkDir, ".fastflow", "handoff.md")
+
+	// Step 1: Continue the exhausted session to write a handoff document
+	if r.Debug {
+		output.Printf("[DEBUG] Running --continue to write handoff document...\n")
+	}
+
+	handoffPrompt := fmt.Sprintf(`Your budget was exhausted before completing the task. Write a handoff document to %s that captures:
+
+1. **What was accomplished** - summarize completed work
+2. **What remains** - list remaining tasks
+3. **Current state** - describe where you left off
+4. **Critical context** - any decisions, discoveries, or gotchas the next session needs to know
+5. **Files modified** - list files you changed or created
+
+Write the handoff document now. This is your only task.`, handoffPath)
+
+	// Ensure .fastflow directory exists
+	if err := os.MkdirAll(filepath.Dir(handoffPath), 0755); err != nil {
+		return nil, fmt.Errorf("failed to create .fastflow directory: %w", err)
+	}
+
+	_, createErr := invoker.InvokeContinue(handoffPrompt, model)
+	if createErr != nil {
+		return nil, fmt.Errorf("handoff continue failed: %w", createErr)
+	}
+
+	// Verify handoff file was created
+	if _, err := os.Stat(handoffPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("handoff document was not created at %s", handoffPath)
+	}
+
+	// Step 2: Fresh session reads handoff and continues the original task
+	if r.Debug {
+		output.Printf("[DEBUG] Starting fresh session from handoff...\n")
+	}
+
+	// Build the original stage prompt
+	originalPrompt, err := r.buildStagePrompt(ctx, stageName, stage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build stage prompt: %w", err)
+	}
+
+	resumePrompt := fmt.Sprintf(`You are resuming work from a previous session that ran out of budget.
+
+**Read the handoff document first**: %s
+
+**Original task prompt**:
+%s
+
+Continue the work described in the handoff document. Pick up where the previous session left off.`, handoffPath, originalPrompt)
+
+	// Create a fresh invoker for the new session (same settings)
+	freshInvoker := NewClaudeInvoker(ctx.WorkDir)
+	freshInvoker.Debug = r.Debug
+	freshInvoker.Verbose = r.Verbose
+	freshInvoker.MaxBudgetUsd = invoker.MaxBudgetUsd
+
+	var resumeResult *InvokeResult
+	if stage.Skill != "" {
+		resumeResult, err = freshInvoker.InvokeWithSkill(stage.Skill, model, resumePrompt)
+	} else {
+		resumeResult, err = freshInvoker.Invoke(resumePrompt, model)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("handoff resume failed: %w", err)
 	}
 
 	return resumeResult, nil
