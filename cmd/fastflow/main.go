@@ -768,6 +768,13 @@ func runList(cmd *cobra.Command, args []string) error {
 				if st, loadErr := state.Load(runDir); loadErr == nil && st != nil && st.Status != "" {
 					status = st.Status
 					stage = st.Stage
+					// Detect stale runs: status is running but process is dead
+					if status == state.StatusRunning {
+						pid, _ := state.ReadPID(runDir)
+						if pid > 0 && !state.IsProcessAlive(pid) {
+							status = "stale"
+						}
+					}
 				}
 
 				entries = append(entries, listEntry{
@@ -792,6 +799,13 @@ func runList(cmd *cobra.Command, args []string) error {
 		status := run.State.Status
 		if status == "" {
 			status = "unknown"
+		}
+		// Detect stale runs: status is running but process is dead
+		if status == state.StatusRunning {
+			pid, _ := state.ReadPID(run.RunDir)
+			if pid > 0 && !state.IsProcessAlive(pid) {
+				status = "stale"
+			}
 		}
 		stage := run.State.Stage
 		created := ""
@@ -860,8 +874,19 @@ func runList(cmd *cobra.Command, args []string) error {
 
 	// Print each entry
 	for _, e := range entries {
+		statusFmt := e.Status
+		switch e.Status {
+		case "stale":
+			statusFmt = color.New(color.FgRed).Sprint(e.Status)
+		case state.StatusFailed:
+			statusFmt = color.New(color.FgRed).Sprint(e.Status)
+		case state.StatusComplete:
+			statusFmt = color.New(color.FgGreen).Sprint(e.Status)
+		case state.StatusRunning:
+			statusFmt = color.New(color.FgCyan).Sprint(e.Status)
+		}
 		output.Printf("%-12s  %-12s  %-12s  %-20s  %s\n",
-			e.Ticket, e.Status, e.Stage, e.Created, e.Summary)
+			e.Ticket, statusFmt, e.Stage, e.Created, e.Summary)
 	}
 
 	output.Printf("\n%d run(s) found\n", len(entries))
