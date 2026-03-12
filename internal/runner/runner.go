@@ -6,8 +6,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/redblacktree/fastflow/internal/config"
@@ -97,17 +99,49 @@ func (r *Runner) Run(ctx *RunContext) error {
 		return fmt.Errorf("failed to create run directory: %w", err)
 	}
 
+	// Write PID file
+	if err := state.WritePID(ctx.RunDir); err != nil {
+		return fmt.Errorf("failed to write PID file: %w", err)
+	}
+	defer state.RemovePID(ctx.RunDir)
+
 	// Initialize or use existing state
 	if pipelineState == nil {
 		pipelineState = state.NewState(ctx.Workflow, workflow.Stages, ctx.Ticket, ctx.WorkDir)
-		if err := pipelineState.Save(ctx.RunDir); err != nil {
-			return fmt.Errorf("failed to save initial state: %w", err)
-		}
 	}
+
+	// Store PID in state and save
+	pipelineState.Pid = os.Getpid()
+	if err := pipelineState.Save(ctx.RunDir); err != nil {
+		return fmt.Errorf("failed to save initial state: %w", err)
+	}
+
+	// Install signal handler — write failed status before exiting
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sigChan)
+	go func() {
+		sig := <-sigChan
+		errMsg := fmt.Sprintf("received signal: %s", sig)
+		pipelineState.SetFinalStatus(ctx.RunDir, state.StatusFailed, 1, errMsg) //nolint:errcheck
+		state.RemovePID(ctx.RunDir)
+		os.Exit(1)
+	}()
+
+	// Defer final status write for error exits
+	var runErr error
+	defer func() {
+		if runErr != nil {
+			if pipelineState.Status != state.StatusComplete && pipelineState.Status != state.StatusFailed {
+				pipelineState.SetFinalStatus(ctx.RunDir, state.StatusFailed, 1, runErr.Error()) //nolint:errcheck
+			}
+		}
+	}()
 
 	// Write the goal file (preserves existing if goal unchanged)
 	if err := r.writeGoalFile(ctx); err != nil {
-		return fmt.Errorf("failed to write goal file: %w", err)
+		runErr = fmt.Errorf("failed to write goal file: %w", err)
+		return runErr
 	}
 
 	// Check if all stages are already complete
@@ -121,7 +155,8 @@ func (r *Runner) Run(ctx *RunContext) error {
 	for i, stageName := range workflow.Stages {
 		stage, err := r.Config.GetStage(stageName)
 		if err != nil {
-			return err
+			runErr = err
+			return runErr
 		}
 
 		// Skip completed stages if resuming
@@ -146,16 +181,16 @@ func (r *Runner) Run(ctx *RunContext) error {
 		result, err := r.executeStage(ctx, stageName, stage)
 		if err != nil {
 			output.Printf("    %s Stage failed: %v\n", errColor("ERROR"), err)
-			pipelineState.SetStatus(ctx.RunDir, state.StatusFailed) //nolint:errcheck
-			return err
+			runErr = err
+			return runErr
 		}
 
 		// Run judge evaluation
 		judgeResult, err := r.evaluateStage(ctx, stageName, stage, result)
 		if err != nil {
 			output.Printf("    %s Judge evaluation failed: %v\n", errColor("ERROR"), err)
-			pipelineState.SetStatus(ctx.RunDir, state.StatusFailed) //nolint:errcheck
-			return err
+			runErr = err
+			return runErr
 		}
 
 		// Handle interactive prompts
@@ -175,7 +210,8 @@ func (r *Runner) Run(ctx *RunContext) error {
 				answer, err = r.promptHumanForAnswer(judgeResult.Reasoning)
 				if err != nil {
 					output.Printf("    %s Failed to get human input: %v\n", errColor("ERROR"), err)
-					return err
+					runErr = err
+					return runErr
 				}
 				result, err = r.continueWithAnswer(ctx, stageName, stage, result, judgeResult.Reasoning, answer)
 			} else {
@@ -187,23 +223,25 @@ func (r *Runner) Run(ctx *RunContext) error {
 
 			if err != nil {
 				output.Printf("    %s Continuation failed: %v\n", errColor("ERROR"), err)
-				return err
+				runErr = err
+				return runErr
 			}
 
 			// Re-evaluate
 			judgeResult, err = r.evaluateStage(ctx, stageName, stage, result)
 			if err != nil {
 				output.Printf("    %s Judge evaluation failed: %v\n", errColor("ERROR"), err)
-				return err
+				runErr = err
+				return runErr
 			}
 		}
 
 		if judgeResult.Interactive && interactionAttempts >= maxInteractionAttempts {
 			output.Printf("    %s Max interaction attempts (%d) reached\n",
 				warning("WARN"), maxInteractionAttempts)
-			pipelineState.SetStatus(ctx.RunDir, state.StatusFailed) //nolint:errcheck
-			return fmt.Errorf("stage %s still requires input after %d attempts: %s",
+			runErr = fmt.Errorf("stage %s still requires input after %d attempts: %s",
 				stageName, maxInteractionAttempts, judgeResult.Reasoning)
+			return runErr
 		}
 
 		// Handle evaluation failure with automatic retry
@@ -218,21 +256,23 @@ func (r *Runner) Run(ctx *RunContext) error {
 			result, err = r.retryWithFeedback(ctx, stageName, stage, result, judgeResult.Reasoning)
 			if err != nil {
 				output.Printf("    %s Retry failed: %v\n", errColor("ERROR"), err)
-				return err
+				runErr = err
+				return runErr
 			}
 
 			judgeResult, err = r.evaluateStage(ctx, stageName, stage, result)
 			if err != nil {
 				output.Printf("    %s Judge evaluation failed: %v\n", errColor("ERROR"), err)
-				return err
+				runErr = err
+				return runErr
 			}
 		}
 
 		if !judgeResult.Success {
 			output.Printf("    %s Stage did not pass evaluation after %d retries\n", errColor("FAILED"), maxEvalRetries)
 			output.Printf("    Reason: %s\n", judgeResult.Reasoning)
-			pipelineState.SetStatus(ctx.RunDir, state.StatusFailed) //nolint:errcheck
-			return fmt.Errorf("stage %s failed evaluation: %s", stageName, judgeResult.Reasoning)
+			runErr = fmt.Errorf("stage %s failed evaluation: %s", stageName, judgeResult.Reasoning)
+			return runErr
 		}
 
 		// Mark stage as complete
@@ -249,7 +289,8 @@ func (r *Runner) Run(ctx *RunContext) error {
 				output.Printf("    %s Failed to update status: %v\n", warning("WARN"), err)
 			}
 			if err := r.handleCheckpoint(ctx, stageName); err != nil {
-				return err
+				runErr = err
+				return runErr
 			}
 			// Restore running status after checkpoint resumes
 			if err := pipelineState.SetStatus(ctx.RunDir, state.StatusRunning); err != nil {
@@ -258,7 +299,7 @@ func (r *Runner) Run(ctx *RunContext) error {
 		}
 	}
 
-	if err := pipelineState.SetStatus(ctx.RunDir, state.StatusComplete); err != nil {
+	if err := pipelineState.SetFinalStatus(ctx.RunDir, state.StatusComplete, 0, ""); err != nil {
 		output.Printf("    %s Failed to update status: %v\n", warning("WARN"), err)
 	}
 	output.Printf("\n%s Pipeline completed successfully!\n", success("SUCCESS"))
@@ -294,10 +335,49 @@ func (r *Runner) RunSingleStage(ctx *RunContext) error {
 		return fmt.Errorf("failed to create run directory: %w", err)
 	}
 
+	// Write PID file
+	if err := state.WritePID(ctx.RunDir); err != nil {
+		return fmt.Errorf("failed to write PID file: %w", err)
+	}
+	defer state.RemovePID(ctx.RunDir)
+
+	// Load or create minimal state for status tracking
+	pipelineState, _ := state.Load(ctx.RunDir)
+	if pipelineState == nil {
+		pipelineState = state.NewState("", nil, ctx.Ticket, ctx.WorkDir)
+	}
+	pipelineState.Pid = os.Getpid()
+	pipelineState.Stage = stageName
+	pipelineState.Status = state.StatusRunning
+	pipelineState.Save(ctx.RunDir) //nolint:errcheck
+
+	// Install signal handler — write failed status before exiting
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sigChan)
+	go func() {
+		sig := <-sigChan
+		errMsg := fmt.Sprintf("received signal: %s", sig)
+		pipelineState.SetFinalStatus(ctx.RunDir, state.StatusFailed, 1, errMsg) //nolint:errcheck
+		state.RemovePID(ctx.RunDir)
+		os.Exit(1)
+	}()
+
+	// Defer final status write for error exits
+	var runErr error
+	defer func() {
+		if runErr != nil {
+			if pipelineState.Status != state.StatusComplete && pipelineState.Status != state.StatusFailed {
+				pipelineState.SetFinalStatus(ctx.RunDir, state.StatusFailed, 1, runErr.Error()) //nolint:errcheck
+			}
+		}
+	}()
+
 	// Write goal file only if goal is provided (preserve existing goal.md)
 	if ctx.Goal != "" {
 		if err := r.writeGoalFile(ctx); err != nil {
-			return fmt.Errorf("failed to write goal file: %w", err)
+			runErr = fmt.Errorf("failed to write goal file: %w", err)
+			return runErr
 		}
 	}
 
@@ -310,20 +390,23 @@ func (r *Runner) RunSingleStage(ctx *RunContext) error {
 	result, err := r.executeStage(ctx, stageName, stage)
 	if err != nil {
 		output.Printf("    %s Stage failed: %v\n", errColor("ERROR"), err)
-		return err
+		runErr = err
+		return runErr
 	}
 
 	// Run judge evaluation (single pass — no retries for single-stage mode)
 	judgeResult, err := r.evaluateStage(ctx, stageName, stage, result)
 	if err != nil {
 		output.Printf("    %s Judge evaluation failed: %v\n", errColor("ERROR"), err)
-		return err
+		runErr = err
+		return runErr
 	}
 
 	if !judgeResult.Success {
 		output.Printf("    %s Stage did not pass evaluation\n", errColor("FAILED"))
 		output.Printf("    Reason: %s\n", judgeResult.Reasoning)
-		return fmt.Errorf("stage %s failed evaluation: %s", stageName, judgeResult.Reasoning)
+		runErr = fmt.Errorf("stage %s failed evaluation: %s", stageName, judgeResult.Reasoning)
+		return runErr
 	}
 
 	output.Printf("    %s Stage completed successfully\n", success("PASS"))
@@ -332,10 +415,12 @@ func (r *Runner) RunSingleStage(ctx *RunContext) error {
 	// Handle checkpoint (still applies in single-stage mode)
 	if stage.Checkpoint && !r.NoReview {
 		if err := r.handleCheckpoint(ctx, stageName); err != nil {
-			return err
+			runErr = err
+			return runErr
 		}
 	}
 
+	pipelineState.SetFinalStatus(ctx.RunDir, state.StatusComplete, 0, "") //nolint:errcheck
 	output.Printf("\n%s Stage %s completed!\n", success("SUCCESS"), bold(stageName))
 	return nil
 }
