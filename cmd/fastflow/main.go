@@ -3,6 +3,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -91,7 +92,10 @@ Examples:
   fastflow run --ticket ENG-1240 --stage plan --goal "Implement feature X"
 
   # Re-run a stage (reads existing goal from run directory)
-  fastflow run --ticket ENG-1240 --stage plan`,
+  fastflow run --ticket ENG-1240 --stage plan
+
+  # Force run even if another run is active (recovery)
+  fastflow run --ticket ENG-1241 --force`,
 	RunE: runRun,
 }
 
@@ -183,6 +187,7 @@ var (
 	flagVerbose     bool
 	flagLogFile     string
 	flagNoColor     bool
+	flagRunForce    bool
 )
 
 func init() {
@@ -212,6 +217,7 @@ func init() {
 	runCmd.Flags().BoolVar(&flagNoWorktree, "no-worktree", false, "Use current directory instead of creating worktree")
 	runCmd.Flags().BoolVar(&flagNoFetch, "no-fetch", false, "Skip fetching main branch from origin before creating worktree")
 	runCmd.Flags().BoolVar(&flagVerbose, "verbose", false, "Show tool activity during stage execution")
+	runCmd.Flags().BoolVar(&flagRunForce, "force", false, "Bypass duplicate run detection (use for recovery)")
 
 	// Only ticket is required - goal can come from multiple sources
 	_ = runCmd.MarkFlagRequired("ticket")
@@ -379,6 +385,7 @@ func readInteractiveStdin() (string, error) {
 func runRun(cmd *cobra.Command, args []string) error {
 	info := color.New(color.FgCyan).SprintFunc()
 	errColor := color.New(color.FgRed).SprintFunc()
+	warning := color.New(color.FgYellow).SprintFunc()
 
 	// Load config first (needed to check workflow settings)
 	cfg, err := config.Load(flagConfigPath)
@@ -478,6 +485,25 @@ func runRun(cmd *cobra.Command, args []string) error {
 
 	// Compute run directory (needs workDir from worktree setup)
 	runDir := runner.GetRunDir(workDir, flagTicket)
+
+	// Check for duplicate active run
+	if !flagRunForce {
+		checkResult, err := state.CheckActiveRun(runDir)
+		if err != nil {
+			var activeErr *state.ActiveRunError
+			if errors.As(err, &activeErr) {
+				return fmt.Errorf("%s Run already active for ticket %s (pid %d). Use --force to override",
+					errColor("ERROR"), flagTicket, activeErr.Pid)
+			}
+			return fmt.Errorf("%s Failed to check for active run: %w", errColor("ERROR"), err)
+		}
+		if checkResult != nil && checkResult.StalePID > 0 {
+			output.Printf("%s Cleaned up stale PID file (pid %d was no longer running)\n",
+				warning("WARNING"), checkResult.StalePID)
+		}
+	} else {
+		output.Printf("%s Skipping duplicate run check (--force)\n", warning("WARNING"))
+	}
 
 	// Resolve goal from various input sources
 	var goal string
