@@ -166,6 +166,85 @@ func TestScanRunDirs(t *testing.T) {
 	}
 }
 
+func TestSetFinalStatus(t *testing.T) {
+	dir := t.TempDir()
+	s := NewState("full", []string{"research"}, "TEST-FINAL", "/tmp/work")
+	if err := s.Save(dir); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	if err := s.SetFinalStatus(dir, StatusFailed, 1, "something went wrong"); err != nil {
+		t.Fatalf("SetFinalStatus failed: %v", err)
+	}
+
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if loaded.Status != StatusFailed {
+		t.Errorf("Status = %q, want %q", loaded.Status, StatusFailed)
+	}
+	if loaded.ExitCode != 1 {
+		t.Errorf("ExitCode = %d, want 1", loaded.ExitCode)
+	}
+	if loaded.Error != "something went wrong" {
+		t.Errorf("Error = %q, want %q", loaded.Error, "something went wrong")
+	}
+}
+
+func TestSetFinalStatus_Complete(t *testing.T) {
+	dir := t.TempDir()
+	s := NewState("full", []string{"research"}, "TEST-COMPLETE", "/tmp/work")
+	if err := s.Save(dir); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	if err := s.SetFinalStatus(dir, StatusComplete, 0, ""); err != nil {
+		t.Fatalf("SetFinalStatus failed: %v", err)
+	}
+
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if loaded.Status != StatusComplete {
+		t.Errorf("Status = %q, want %q", loaded.Status, StatusComplete)
+	}
+	if loaded.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0", loaded.ExitCode)
+	}
+	if loaded.Error != "" {
+		t.Errorf("Error = %q, want empty", loaded.Error)
+	}
+}
+
+func TestBackwardCompatibility_NewFields(t *testing.T) {
+	// Old state.json without exit_code, error, pid
+	dir := t.TempDir()
+	oldState := map[string]interface{}{
+		"completed_stages": []string{"research"},
+		"workflow":         "full",
+		"config_hash":      "abc123",
+		"status":           "running",
+	}
+	data, _ := json.MarshalIndent(oldState, "", "  ")
+	os.WriteFile(filepath.Join(dir, StateFileName), data, 0644) //nolint:errcheck
+
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if loaded.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0", loaded.ExitCode)
+	}
+	if loaded.Error != "" {
+		t.Errorf("Error = %q, want empty", loaded.Error)
+	}
+	if loaded.Pid != 0 {
+		t.Errorf("Pid = %d, want 0", loaded.Pid)
+	}
+}
+
 func TestScanRunDirs_NoDirectory(t *testing.T) {
 	dir := t.TempDir()
 	// No thoughts/shared/runs/ exists

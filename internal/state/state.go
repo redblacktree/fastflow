@@ -41,6 +41,12 @@ type PipelineState struct {
 	UpdatedAt string `json:"updated_at,omitempty"`
 	// WorkDir is the absolute path to the working directory for this run.
 	WorkDir string `json:"work_dir,omitempty"`
+	// ExitCode is the process exit code (0 for success, non-zero for failure).
+	ExitCode int `json:"exit_code,omitempty"`
+	// Error is the error message if the run failed.
+	Error string `json:"error,omitempty"`
+	// Pid is the process ID of the fastflow process.
+	Pid int `json:"pid,omitempty"`
 }
 
 // Load reads the state file from the run directory.
@@ -101,6 +107,15 @@ func (s *PipelineState) SetStatus(runDir, status string) error {
 // SetStage updates the current stage name and saves.
 func (s *PipelineState) SetStage(runDir, stageName string) error {
 	s.Stage = stageName
+	s.UpdatedAt = time.Now().Format(time.RFC3339)
+	return s.Save(runDir)
+}
+
+// SetFinalStatus updates the run to a terminal state with exit details and saves.
+func (s *PipelineState) SetFinalStatus(runDir, status string, exitCode int, errMsg string) error {
+	s.Status = status
+	s.ExitCode = exitCode
+	s.Error = errMsg
 	s.UpdatedAt = time.Now().Format(time.RFC3339)
 	return s.Save(runDir)
 }
