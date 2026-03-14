@@ -50,6 +50,7 @@ type RunContext struct {
 	RunDir     string
 	RepoPath   string
 	BranchName string
+	OnComplete string // Shell command to execute after run completes
 }
 
 // NewRunner creates a new pipeline runner.
@@ -112,6 +113,9 @@ func (r *Runner) Run(ctx *RunContext) error {
 
 	// Store PID in state and save
 	pipelineState.Pid = os.Getpid()
+	if ctx.OnComplete != "" {
+		pipelineState.OnComplete = ctx.OnComplete
+	}
 	if err := pipelineState.Save(ctx.RunDir); err != nil {
 		return fmt.Errorf("failed to save initial state: %w", err)
 	}
@@ -135,6 +139,7 @@ func (r *Runner) Run(ctx *RunContext) error {
 			if pipelineState.Status != state.StatusComplete && pipelineState.Status != state.StatusFailed {
 				pipelineState.SetFinalStatus(ctx.RunDir, state.StatusFailed, 1, runErr.Error()) //nolint:errcheck
 			}
+			executeOnComplete(ctx, pipelineState)
 		}
 	}()
 
@@ -302,6 +307,7 @@ func (r *Runner) Run(ctx *RunContext) error {
 	if err := pipelineState.SetFinalStatus(ctx.RunDir, state.StatusComplete, 0, ""); err != nil {
 		output.Printf("    %s Failed to update status: %v\n", warning("WARN"), err)
 	}
+	executeOnComplete(ctx, pipelineState)
 	output.Printf("\n%s Pipeline completed successfully!\n", success("SUCCESS"))
 	return nil
 }
@@ -349,6 +355,9 @@ func (r *Runner) RunSingleStage(ctx *RunContext) error {
 	pipelineState.Pid = os.Getpid()
 	pipelineState.Stage = stageName
 	pipelineState.Status = state.StatusRunning
+	if ctx.OnComplete != "" {
+		pipelineState.OnComplete = ctx.OnComplete
+	}
 	pipelineState.Save(ctx.RunDir) //nolint:errcheck
 
 	// Install signal handler — write failed status before exiting
@@ -370,6 +379,7 @@ func (r *Runner) RunSingleStage(ctx *RunContext) error {
 			if pipelineState.Status != state.StatusComplete && pipelineState.Status != state.StatusFailed {
 				pipelineState.SetFinalStatus(ctx.RunDir, state.StatusFailed, 1, runErr.Error()) //nolint:errcheck
 			}
+			executeOnComplete(ctx, pipelineState)
 		}
 	}()
 
@@ -421,6 +431,7 @@ func (r *Runner) RunSingleStage(ctx *RunContext) error {
 	}
 
 	pipelineState.SetFinalStatus(ctx.RunDir, state.StatusComplete, 0, "") //nolint:errcheck
+	executeOnComplete(ctx, pipelineState)
 	output.Printf("\n%s Stage %s completed!\n", success("SUCCESS"), bold(stageName))
 	return nil
 }
@@ -1107,6 +1118,35 @@ Continue with the task based on the human's answer. Proceed with the implementat
 `, ctx.Goal, ctx.Ticket, question, answer, truncateForContext(previousResult.Output, 5000))
 
 	return invoker.Invoke(prompt, model)
+}
+
+// executeOnComplete runs the on-complete shell command with environment variables
+// describing the run result. Errors are logged but do not affect the caller.
+func executeOnComplete(ctx *RunContext, pState *state.PipelineState) {
+	cmd := pState.OnComplete
+	if cmd == "" {
+		return
+	}
+
+	env := os.Environ()
+	env = append(env,
+		"FASTFLOW_TICKET="+pState.Ticket,
+		"FASTFLOW_STATUS="+pState.Status,
+		"FASTFLOW_WORKTREE="+ctx.WorkDir,
+		"FASTFLOW_ERROR="+pState.Error,
+		"FASTFLOW_PR_URL=",
+		"FASTFLOW_WORKFLOW="+pState.Workflow,
+	)
+
+	c := exec.Command("sh", "-c", cmd)
+	c.Env = env
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+
+	if err := c.Run(); err != nil {
+		warning := color.New(color.FgYellow).SprintFunc()
+		output.Printf("    %s on-complete command failed: %v\n", warning("WARN"), err)
+	}
 }
 
 // truncateForContext truncates output to fit within context limits.

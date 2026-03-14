@@ -47,6 +47,8 @@ type PipelineState struct {
 	Error string `json:"error,omitempty"`
 	// Pid is the process ID of the fastflow process.
 	Pid int `json:"pid,omitempty"`
+	// OnComplete is the shell command to execute after run completes.
+	OnComplete string `json:"on_complete,omitempty"`
 }
 
 // Load reads the state file from the run directory.

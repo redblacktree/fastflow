@@ -183,11 +183,12 @@ var (
 	flagCleanPrefix string
 	flagCleanForce  bool
 	flagNoWorktree  bool
-	flagNoFetch     bool
-	flagVerbose     bool
-	flagLogFile     string
-	flagNoColor     bool
-	flagRunForce    bool
+	flagNoFetch      bool
+	flagVerbose      bool
+	flagLogFile      string
+	flagNoColor      bool
+	flagRunForce     bool
+	flagOnComplete   string
 )
 
 func init() {
@@ -218,6 +219,7 @@ func init() {
 	runCmd.Flags().BoolVar(&flagNoFetch, "no-fetch", false, "Skip fetching main branch from origin before creating worktree")
 	runCmd.Flags().BoolVar(&flagVerbose, "verbose", false, "Show tool activity during stage execution")
 	runCmd.Flags().BoolVar(&flagRunForce, "force", false, "Bypass duplicate run detection (use for recovery)")
+	runCmd.Flags().StringVar(&flagOnComplete, "on-complete", "", "Shell command to run after completion (receives FASTFLOW_* env vars)")
 
 	// Only ticket is required - goal can come from multiple sources
 	_ = runCmd.MarkFlagRequired("ticket")
@@ -541,6 +543,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 		RunDir:     runDir,
 		RepoPath:   cwd,
 		BranchName: branchName,
+		OnComplete: flagOnComplete,
 	}
 
 	// Create and run the pipeline
