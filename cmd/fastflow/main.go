@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"syscall"
 
 	"github.com/redblacktree/fastflow/internal/config"
 	"github.com/redblacktree/fastflow/internal/output"
@@ -189,6 +190,7 @@ var (
 	flagNoColor      bool
 	flagRunForce     bool
 	flagOnComplete   string
+	flagBackground   bool
 )
 
 func init() {
@@ -220,6 +222,7 @@ func init() {
 	runCmd.Flags().BoolVar(&flagVerbose, "verbose", false, "Show tool activity during stage execution")
 	runCmd.Flags().BoolVar(&flagRunForce, "force", false, "Bypass duplicate run detection (use for recovery)")
 	runCmd.Flags().StringVar(&flagOnComplete, "on-complete", "", "Shell command to run after completion (receives FASTFLOW_* env vars)")
+	runCmd.Flags().BoolVar(&flagBackground, "background", false, "Run in background (detach from terminal)")
 
 	// Only ticket is required - goal can come from multiple sources
 	_ = runCmd.MarkFlagRequired("ticket")
@@ -533,6 +536,55 @@ func runRun(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Handle --background: re-exec as a detached child process
+	if flagBackground && os.Getenv("FASTFLOW_DAEMONIZED") != "1" {
+		// Ensure run directory exists for log file
+		if err := os.MkdirAll(runDir, 0755); err != nil {
+			return fmt.Errorf("%s Failed to create run directory: %w", errColor("ERROR"), err)
+		}
+
+		logPath := filepath.Join(runDir, "fastflow.log")
+		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return fmt.Errorf("%s Failed to create log file: %w", errColor("ERROR"), err)
+		}
+
+		// Build child command with same args plus daemonize marker
+		childEnv := append(os.Environ(), "FASTFLOW_DAEMONIZED=1")
+
+		// If goal was resolved interactively (not from --goal or --goal-file),
+		// pass it explicitly so the child doesn't need stdin
+		childArgs := make([]string, len(os.Args[1:]))
+		copy(childArgs, os.Args[1:])
+		if goal != "" && flagGoal == "" && flagGoalFile == "" {
+			childArgs = append(childArgs, "--goal", goal)
+		}
+
+		childCmd := exec.Command(os.Args[0], childArgs...)
+		childCmd.Env = childEnv
+		childCmd.Stdout = logFile
+		childCmd.Stderr = logFile
+		childCmd.Stdin = nil
+		childCmd.SysProcAttr = &syscall.SysProcAttr{
+			Setsid: true,
+		}
+
+		if err := childCmd.Start(); err != nil {
+			logFile.Close()
+			return fmt.Errorf("%s Failed to start background process: %w", errColor("ERROR"), err)
+		}
+
+		childPid := childCmd.Process.Pid
+		logFile.Close()
+
+		// Don't wait for child — it's detached
+		childCmd.Process.Release()
+
+		output.Printf("%s fastflow running in background (PID %d)\n", info(">>>"), childPid)
+		output.Printf("    Log: %s\n", logPath)
+		return nil
+	}
+
 	// Create run context
 	ctx := &runner.RunContext{
 		Goal:       goal,
@@ -753,6 +805,8 @@ func runList(cmd *cobra.Command, args []string) error {
 		Stage   string
 		Created string
 		Summary string
+		Pid     int
+		LogPath string
 	}
 
 	seen := make(map[string]bool)
@@ -794,16 +848,27 @@ func runList(cmd *cobra.Command, args []string) error {
 
 				// Try to read state.json for richer status
 				runDir := runner.GetRunDir(wt.Path, wt.Ticket)
+				var entryPid int
 				if st, loadErr := state.Load(runDir); loadErr == nil && st != nil && st.Status != "" {
 					status = st.Status
 					stage = st.Stage
 					// Detect stale runs: status is running but process is dead
 					if status == state.StatusRunning {
 						pid, _ := state.ReadPID(runDir)
-						if pid > 0 && !state.IsProcessAlive(pid) {
-							status = "stale"
+						if pid > 0 {
+							if !state.IsProcessAlive(pid) {
+								status = "stale"
+							} else {
+								entryPid = pid
+							}
 						}
 					}
+				}
+
+				var entryLogPath string
+				logPath := filepath.Join(runDir, "fastflow.log")
+				if _, statErr := os.Stat(logPath); statErr == nil {
+					entryLogPath = logPath
 				}
 
 				entries = append(entries, listEntry{
@@ -812,6 +877,8 @@ func runList(cmd *cobra.Command, args []string) error {
 					Stage:   stage,
 					Created: created,
 					Summary: summary,
+					Pid:     entryPid,
+					LogPath: entryLogPath,
 				})
 				seen[wt.Ticket] = true
 			}
@@ -830,10 +897,15 @@ func runList(cmd *cobra.Command, args []string) error {
 			status = "unknown"
 		}
 		// Detect stale runs: status is running but process is dead
+		var entryPid int
 		if status == state.StatusRunning {
 			pid, _ := state.ReadPID(run.RunDir)
-			if pid > 0 && !state.IsProcessAlive(pid) {
-				status = "stale"
+			if pid > 0 {
+				if !state.IsProcessAlive(pid) {
+					status = "stale"
+				} else {
+					entryPid = pid
+				}
 			}
 		}
 		stage := run.State.Stage
@@ -857,12 +929,20 @@ func runList(cmd *cobra.Command, args []string) error {
 			}
 		}
 
+		var entryLogPath string
+		logPath := filepath.Join(run.RunDir, "fastflow.log")
+		if _, statErr := os.Stat(logPath); statErr == nil {
+			entryLogPath = logPath
+		}
+
 		entries = append(entries, listEntry{
 			Ticket:  run.Ticket,
 			Status:  status,
 			Stage:   stage,
 			Created: created,
 			Summary: summary,
+			Pid:     entryPid,
+			LogPath: entryLogPath,
 		})
 		seen[run.Ticket] = true
 	}
@@ -914,8 +994,15 @@ func runList(cmd *cobra.Command, args []string) error {
 		case state.StatusRunning:
 			statusFmt = color.New(color.FgCyan).Sprint(e.Status)
 		}
-		output.Printf("%-12s  %-12s  %-12s  %-20s  %s\n",
-			e.Ticket, statusFmt, e.Stage, e.Created, e.Summary)
+		pidStr := ""
+		if e.Pid > 0 {
+			pidStr = fmt.Sprintf(" (pid %d)", e.Pid)
+		}
+		output.Printf("%-12s  %-12s  %-12s  %-20s  %s%s\n",
+			e.Ticket, statusFmt, e.Stage, e.Created, e.Summary, pidStr)
+		if e.LogPath != "" {
+			output.Printf("%-12s  %s\n", "", dim("Log: "+e.LogPath))
+		}
 	}
 
 	output.Printf("\n%d run(s) found\n", len(entries))
