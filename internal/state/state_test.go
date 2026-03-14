@@ -245,6 +245,44 @@ func TestBackwardCompatibility_NewFields(t *testing.T) {
 	}
 }
 
+func TestOnComplete_Persistence(t *testing.T) {
+	dir := t.TempDir()
+	s := NewState("full", []string{"plan"}, "TEST-OC", "/tmp/work")
+	s.OnComplete = "echo done"
+	if err := s.Save(dir); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if loaded.OnComplete != "echo done" {
+		t.Errorf("OnComplete = %q, want %q", loaded.OnComplete, "echo done")
+	}
+}
+
+func TestOnComplete_BackwardCompatibility(t *testing.T) {
+	// Old state.json without on_complete should load fine
+	dir := t.TempDir()
+	oldState := map[string]interface{}{
+		"completed_stages": []string{},
+		"workflow":         "full",
+		"config_hash":      "abc123",
+		"status":           "running",
+	}
+	data, _ := json.MarshalIndent(oldState, "", "  ")
+	os.WriteFile(filepath.Join(dir, StateFileName), data, 0644) //nolint:errcheck
+
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if loaded.OnComplete != "" {
+		t.Errorf("OnComplete = %q, want empty", loaded.OnComplete)
+	}
+}
+
 func TestScanRunDirs_NoDirectory(t *testing.T) {
 	dir := t.TempDir()
 	// No thoughts/shared/runs/ exists
