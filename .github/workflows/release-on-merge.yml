@@ -101,3 +101,10 @@ jobs:
           echo "✅ Release created successfully!"
           echo "Version: ${{ steps.calc_version.outputs.new_version }}"
           echo "PR: #${{ github.event.pull_request.number }} - ${{ github.event.pull_request.title }}"
+
+  notify-on-failure:
+    needs: [create-release]
+    if: failure()
+    uses: ./.github/workflows/notify-openclaw.yml
+    secrets:
+      OPENCLAW_HOOKS_TOKEN: ${{ secrets.OPENCLAW_HOOKS_TOKEN }}
