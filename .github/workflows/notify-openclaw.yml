@@ -1,0 +1,53 @@
+name: Notify OpenClaw
+
+on:
+  workflow_call:
+    inputs:
+      agent:
+        description: 'Agent to notify (e.g., q, main)'
+        required: false
+        default: 'q'
+        type: string
+      event:
+        description: 'Event description override'
+        required: false
+        default: ''
+        type: string
+    secrets:
+      OPENCLAW_HOOKS_TOKEN:
+        required: true
+      OPENCLAW_HOOKS_URL:
+        required: false
+
+jobs:
+  notify:
+    name: Notify agent
+    runs-on: ubuntu-latest
+    if: failure()
+    steps:
+      - name: Send failure notification
+        env:
+          HOOKS_URL: ${{ secrets.OPENCLAW_HOOKS_URL || 'https://dustins-mac-mini.tail3ffc8d.ts.net' }}
+          HOOKS_TOKEN: ${{ secrets.OPENCLAW_HOOKS_TOKEN }}
+          AGENT_ID: ${{ inputs.agent }}
+          EVENT_DESC: ${{ inputs.event }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WORKFLOW: ${{ github.workflow }}
+          ACTOR: ${{ github.actor }}
+          SHA: ${{ github.sha }}
+        run: |
+          MESSAGE="${EVENT_DESC:-CI failure in ${REPO} on branch ${BRANCH}}"
+          MESSAGE="${MESSAGE}. Workflow: ${WORKFLOW}. Triggered by: ${ACTOR}. Commit: ${SHA:0:7}. Logs: ${RUN_URL}"
+
+          curl -sf -X POST "${HOOKS_URL}/hooks/agent" \
+            -H "Authorization: Bearer ${HOOKS_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg message "$MESSAGE" \
+              --arg name "GitHub CI" \
+              --arg agentId "$AGENT_ID" \
+              '{message: $message, name: "GitHub CI", agentId: $agentId, deliver: false}'
+            )"
