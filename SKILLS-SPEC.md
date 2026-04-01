@@ -1,8 +1,13 @@
 # SKILLS-SPEC: Migrate Fastflow Prompts to Claude Code Skills
 
-**Status:** Draft  
-**Author:** Q  
+**Status:** Draft
+**Author:** Q
 **Date:** 2026-03-26
+**Updated:** 2026-04-01
+
+## Decision Log
+
+- **2026-04-01:** No backward compatibility. We're the only users (plus one other who's in daily contact). This is a breaking change shipped as v0.6. No phased migration, no `prompt_file` fallback, no `--legacy` flags. Rip out embedded prompts, ship skills, done.
 
 ## Problem
 
@@ -13,11 +18,11 @@ This creates several problems:
 1. **Repo pollution.** Every initialized repo gets `.claude/commands/`, `.claude/stages/`, and `.claude/agents/` directories — files the repo owner didn't write and shouldn't need to maintain.
 2. **Tight coupling.** Prompt updates require a fastflow binary release. Users can't update prompts independently.
 3. **No reuse.** The prompts are locked inside fastflow. Other tools or workflows can't use `ff_create_plan` without fastflow.
-4. **No customization.** Users who want to tweak a single prompt (e.g. change the plan format) must fork fastflow or manually edit the generated files and hope `fastflow init --force` doesn't overwrite them.
+4. **No customization.** Users who want to tweak a single prompt must fork fastflow or manually edit generated files and hope `fastflow init --force` doesn't overwrite them.
 
 ## Proposal
 
-Migrate all embedded prompts to **Claude Code skills** and make skills the primary execution path. The existing `InvokeWithSkill` method and `skill` field on Stage config already support this — the plumbing exists, it just isn't the default path.
+Migrate all embedded prompts to **Claude Code skills** and make skills the sole execution path. Remove the embedded prompt system entirely. The existing `InvokeWithSkill` method and `skill` field on Stage config already support this — the plumbing exists, it just isn't the default path.
 
 ## Current Architecture
 
@@ -43,7 +48,7 @@ orchestrator.json
   └─ stages.plan.model = "opus"
 
 fastflow skills install
-  └─ clones skills from repo → ~/.claude/skills/fastflow/
+  └─ extracts embedded skills → ~/.claude/skills/fastflow/
 
 fastflow run
   └─ pre-flight: validates all referenced skills exist
@@ -59,7 +64,7 @@ Each fastflow prompt becomes a Claude Code skill installed at `~/.claude/skills/
 ```
 ~/.claude/skills/fastflow/
 ├── ff_create_plan/
-│   └── SKILL.md          # current ff_create_plan.md content
+│   └── SKILL.md
 ├── ff_implement_plan/
 │   └── SKILL.md
 ├── ff_research_codebase/
@@ -87,16 +92,11 @@ Each fastflow prompt becomes a Claude Code skill installed at `~/.claude/skills/
 └── ...
 ```
 
-#### What about stage prompts and agents?
+#### Agent Prompts
 
-**Stage prompts** (e.g. `stages/plan.md`) are thin wrappers that tell Claude "read the goal, find research, then run `/ff_create_plan`". These get **folded into the corresponding skill** as a preamble or absorbed into the context that fastflow passes at invocation time.
+**Decision: Inline into parent skills.** Agent prompts (e.g. `codebase-locator.md`, `thoughts-analyzer.md`) are inlined into the skills that reference them. The shared agents (`codebase-locator`, `codebase-analyzer`) only overlap between `ff_create_plan` and `ff_research_codebase` — not enough duplication to justify nested skills. Can refactor later if reuse becomes real.
 
-**Agent prompts** (e.g. `agents/codebase-locator.md`) are sub-agent definitions referenced by the larger skills. Two options:
-
-- **Option A: Inline them.** The skills that reference sub-agents (like `ff_create_plan` referencing `codebase-locator`) include the agent behavior directly. Simpler, but duplicates content if multiple skills reference the same agent.
-- **Option B: Nested skills.** Agent prompts become their own skills (e.g. `ff_agent_codebase_locator`), and parent skills reference them by slash command. More modular, but deeper dependency chain.
-
-**Recommendation:** Option A for now. The agent prompts are specialized enough that sharing across skills is rare in practice. Can refactor to Option B later if reuse becomes real.
+**Stage prompts** (e.g. `stages/plan.md`) are thin wrappers — their content gets folded into the corresponding skill or absorbed into the context fastflow passes at invocation time.
 
 ### 2. Orchestrator Config Changes
 
@@ -125,15 +125,11 @@ Replace `prompt_file` + `requires` with `skill`:
 }
 ```
 
-The `requires` field becomes unnecessary — skill existence is validated at pre-flight, not by checking for files in the repo.
-
-`prompt_file` remains supported for backward compatibility (custom stages that aren't skills), but the default `orchestrator.json` shipped with fastflow uses skills exclusively.
+The `prompt_file` and `requires` fields are removed from the config schema. No fallback.
 
 ### 3. Context Injection
 
-Current stage prompts use `{ticket}`, `{goal}`, `{run_dir}` placeholders that fastflow substitutes before passing to Claude. Skills can't use this mechanism since they're static files.
-
-Instead, fastflow passes context as the **invocation argument** to `InvokeWithSkill`:
+Skills are static files, so fastflow can't use placeholder substitution. Instead, fastflow passes context as the **invocation argument** to `InvokeWithSkill`:
 
 ```go
 context := fmt.Sprintf(`## Fastflow Context
@@ -149,7 +145,7 @@ context := fmt.Sprintf(`## Fastflow Context
 invoker.InvokeWithSkill(stage.Skill, model, context)
 ```
 
-This already works — `InvokeWithSkill` prepends `/<skill>\n\n<context>` and passes it to `claude --print`. Skills read the context from their invocation, not from placeholders.
+This already works — `InvokeWithSkill` prepends `/<skill>\n\n<context>` and passes it to `claude --print`.
 
 ### 4. Pre-flight Validation
 
@@ -160,7 +156,10 @@ func (r *Runner) ValidateSkills(workflow *config.Workflow) error {
     var missing []string
     for _, stageName := range workflow.Stages {
         stage := r.Config.Stages[stageName]
-        if stage.Skill != "" && !skillExists(stage.Skill) {
+        if stage.Skill == "" {
+            return fmt.Errorf("stage %q has no skill defined", stageName)
+        }
+        if !skillExists(stage.Skill) {
             missing = append(missing, stage.Skill)
         }
     }
@@ -172,7 +171,6 @@ func (r *Runner) ValidateSkills(workflow *config.Workflow) error {
 }
 
 func skillExists(name string) bool {
-    // Check ~/.claude/skills/fastflow/<name>/SKILL.md
     home, _ := os.UserHomeDir()
     path := filepath.Join(home, ".claude", "skills", "fastflow", name, "SKILL.md")
     _, err := os.Stat(path)
@@ -180,76 +178,79 @@ func skillExists(name string) bool {
 }
 ```
 
+Note: every stage must now have a `skill` field. No fallback to `prompt_file`.
+
 ### 5. Skill Distribution
 
 New CLI command: `fastflow skills install`
 
 ```
-fastflow skills install          # install all default skills
+fastflow skills install          # install all skills
 fastflow skills install --list   # show available skills
 fastflow skills install <name>   # install a specific skill
-fastflow skills update           # update to latest versions
+fastflow skills update           # update to latest versions (alias for install --force)
 fastflow skills path             # print skill install directory
 ```
 
-**Source:** Skills are stored in a dedicated directory within the fastflow repo (e.g. `skills/`) and distributed with the binary via `embed.FS` — same mechanism as today, but installed to `~/.claude/skills/fastflow/` instead of the repo's `.claude/` directory.
+**Source:** Skills are stored in `skills/` within the fastflow repo and embedded via `embed.FS`. `fastflow skills install` extracts them to `~/.claude/skills/fastflow/`. Skills are versioned with the binary — v0.6 binary installs v0.6 skills.
 
-**Why embed, not a separate repo?** Keeps skills versioned with the fastflow release. A `fastflow skills install` with v0.5.0 installs v0.5.0 skills. Avoids version skew between binary and prompts. A future registry could supplement this for community skills.
+**Custom overrides:** Project-local `.claude/skills/` takes precedence over `~/.claude/skills/fastflow/` in Claude Code's skill resolution. This means users can customize a skill per-repo without it getting clobbered by `fastflow skills update`.
 
 ### 6. `fastflow init` Changes
 
-`fastflow init` currently copies all `.claude/` files into the repo. After migration:
-
 ```
 fastflow init
-  ├── creates orchestrator.json (with skill references)
+  ├── creates orchestrator.json (with skill references, no prompt_file)
   ├── creates thoughts/ scaffold
   ├── runs fastflow skills install (if skills not found)
-  └── NO LONGER copies .claude/commands/, .claude/stages/, .claude/agents/
+  └── does NOT create .claude/commands/, .claude/stages/, or .claude/agents/
 ```
 
-For repos that already have `.claude/` files from a previous init:
-- `fastflow init` warns about stale files but doesn't delete them
-- A `fastflow migrate` command (optional) removes old `.claude/` files and updates `orchestrator.json` to use skills
+### 7. Skill Namespacing
 
-### 7. Backward Compatibility
+Skills live at `~/.claude/skills/fastflow/<name>/`. The `fastflow/` namespace avoids collisions with skills from other tools and makes `fastflow skills update` a clean wipe-and-replace of that single directory.
 
-- `prompt_file` continues to work. If a stage has both `skill` and `prompt_file`, `skill` takes precedence.
-- `requires` is ignored when `skill` is set (skills are self-contained).
-- Existing repos with `.claude/` files continue working — nothing breaks until the user runs `fastflow init --force` or `fastflow migrate`.
-- `orchestrator.json` format is additive, not breaking.
+## Removed Code
 
-## Migration Path
+The following are deleted, not deprecated:
 
-### Phase 1: Ship skills alongside prompts
-- Add `skills/` directory to fastflow repo with all prompts converted to SKILL.md format
-- Add `fastflow skills install` command
-- Add pre-flight skill validation
-- Update default `orchestrator.json` to use `skill` field
-- **Keep embedded prompt files** — both paths work
+| Removed | Replacement |
+|---------|-------------|
+| `internal/templates/files/.claude/commands/*.md` | `skills/*/SKILL.md` |
+| `internal/templates/files/.claude/stages/*.md` | Absorbed into skills + runner context |
+| `internal/templates/files/.claude/agents/*.md` | Inlined into parent skills |
+| `prompt_file` field on Stage config | `skill` field (already exists) |
+| `requires` field on Stage config | Skills are self-contained |
+| Template copy logic for `.claude/` dirs in `fastflow init` | `fastflow skills install` |
 
-### Phase 2: Default to skills
-- `fastflow init` no longer copies `.claude/` files by default
-- Add `fastflow init --legacy` for the old behavior
-- Add `fastflow migrate` for existing repos
-- Deprecation warnings when `prompt_file` is used for built-in stages
+## Go Code Changes
 
-### Phase 3: Remove embedded prompts
-- Remove `internal/templates/files/.claude/{commands,stages,agents}/`
-- Remove `prompt_file` resolution for built-in stage names
-- `prompt_file` still works for user-defined custom stages
+### Files Modified
 
-## Open Questions
+| File | Change |
+|------|--------|
+| `internal/config/config.go` | Remove `PromptFile` and `Requires` from Stage struct |
+| `internal/config/validate.go` | Require `Skill` on every stage; add skill existence validation |
+| `internal/runner/runner.go` | Add `ValidateSkills()` call; update hardcoded handoff/resume to use skills |
+| `internal/templates/templates.go` | Replace `.claude/` copy logic with `InstallSkills()` targeting `~/.claude/skills/fastflow/` |
+| `cmd/fastflow/main.go` | Register `skills` subcommand |
 
-1. **Skill namespacing.** Should skills live at `~/.claude/skills/fastflow/ff_create_plan/` or `~/.claude/skills/ff_create_plan/`? Namespacing under `fastflow/` avoids collisions with other tools but adds a path segment.
+### Files Added
 
-2. **Handoff/resume skills.** `ff_create_handoff` and `ff_resume_handoff` are invoked internally by the runner (not via stage config). These should still become skills, but the runner's hardcoded references need updating.
+| File | Purpose |
+|------|---------|
+| `skills/ff_create_plan/SKILL.md` | Converted from commands + stage + agent prompts |
+| `skills/ff_implement_plan/SKILL.md` | Converted from commands/ff_implement_plan.md |
+| `skills/...` | One directory per skill (see inventory below) |
+| `cmd/fastflow/skills.go` | `fastflow skills` subcommand |
 
-3. **Agent prompt inlining.** The largest command (`ff_create_plan`, 449 lines) references multiple sub-agents. Inlining agent prompts could push it past 600 lines. Is that acceptable, or should we split into nested skills from the start?
+### Files Removed
 
-4. **Custom skill overrides.** If a user wants to customize `ff_create_plan`, should they fork the skill in `~/.claude/skills/fastflow/` (gets overwritten on update) or place an override in a project-local `.claude/skills/` directory? Claude Code's skill resolution order determines this.
-
-5. **`reply-to-comments` stage.** This stage exists only in the `review-with-replies` workflow and references `ff_reply_to_comments.md`. The stage prompt file doesn't currently exist in embedded templates but the command does. Needs to be created as a skill or the stage needs to directly reference the skill name.
+| File |
+|------|
+| `internal/templates/files/.claude/commands/*.md` (all 16) |
+| `internal/templates/files/.claude/stages/*.md` (all 8) |
+| `internal/templates/files/.claude/agents/*.md` (all 6) |
 
 ## File Inventory
 
@@ -257,15 +258,15 @@ For repos that already have `.claude/` files from a previous init:
 
 | File | Lines | Skill Name | Notes |
 |------|-------|------------|-------|
-| `ff_create_plan.md` | 449 | `ff_create_plan` | References 4 sub-agents |
+| `ff_create_plan.md` | 449 | `ff_create_plan` | + 4 inlined agent prompts |
 | `ff_linear.md` | 388 | `ff_linear` | Linear API integration |
 | `ff_iterate_plan.md` | 249 | `ff_iterate_plan` | Plan refinement |
-| `ff_resume_handoff.md` | 217 | `ff_resume_handoff` | Internal runner use |
-| `ff_research_codebase.md` | 213 | `ff_research_codebase` | References 3 sub-agents |
+| `ff_resume_handoff.md` | 217 | `ff_resume_handoff` | Runner invokes directly |
+| `ff_research_codebase.md` | 213 | `ff_research_codebase` | + 3 inlined agent prompts |
 | `ff_debug.md` | 200 | `ff_debug` | Debugging workflow |
 | `ff_validate_plan.md` | 166 | `ff_validate_plan` | Validation |
 | `ff_resolve_conflicts.md` | 155 | `ff_resolve_conflicts` | Merge conflicts |
-| `ff_create_handoff.md` | 95 | `ff_create_handoff` | Internal runner use |
+| `ff_create_handoff.md` | 95 | `ff_create_handoff` | Runner invokes directly |
 | `ff_describe_pr.md` | 76 | `ff_describe_pr` | PR descriptions |
 | `ff_implement_plan.md` | 72 | `ff_implement_plan` | Implementation |
 | `ff_local_review.md` | 48 | `ff_local_review` | Self-review |
@@ -290,8 +291,8 @@ For repos that already have `.claude/` files from a previous init:
 
 ### Agent Prompts (6 files, ~873 lines) — Inlined into parent skills
 
-| File | Lines | Referenced By |
-|------|-------|---------------|
+| File | Lines | Inlined Into |
+|------|-------|--------------|
 | `codebase-pattern-finder.md` | 227 | `ff_create_plan`, `ff_research_codebase` |
 | `thoughts-analyzer.md` | 145 | `ff_create_plan` |
 | `codebase-analyzer.md` | 143 | `ff_create_plan`, `ff_research_codebase` |
@@ -299,41 +300,20 @@ For repos that already have `.claude/` files from a previous init:
 | `codebase-locator.md` | 122 | `ff_create_plan`, `ff_research_codebase` |
 | `web-search-researcher.md` | 109 | `ff_research_codebase` |
 
-## Go Code Changes
+## Open Questions
 
-### Files Modified
+1. **Handoff/resume skills.** `ff_create_handoff` and `ff_resume_handoff` are invoked directly by the runner, not via stage config. The runner's hardcoded references need updating to use `InvokeWithSkill`.
 
-| File | Change |
-|------|--------|
-| `internal/config/config.go` | No structural change (Stage.Skill field already exists) |
-| `internal/config/validate.go` | Add skill existence validation |
-| `internal/runner/runner.go` | Add `ValidateSkills()` call before workflow execution; update hardcoded handoff/resume skill refs |
-| `internal/runner/claude.go` | No change (`InvokeWithSkill` already works) |
-| `internal/templates/templates.go` | Add `InstallSkills()` function targeting `~/.claude/skills/fastflow/` |
-| `cmd/fastflow/skills.go` | New — `fastflow skills` subcommand |
-| `cmd/fastflow/migrate.go` | New — `fastflow migrate` subcommand |
+2. **`reply-to-comments` stage.** Exists only in the `review-with-replies` workflow. The stage prompt file doesn't currently exist in embedded templates but the command does. Needs to be created as a skill.
 
-### Files Added
-
-| File | Purpose |
-|------|---------|
-| `skills/ff_create_plan/SKILL.md` | Converted from commands/ff_create_plan.md |
-| `skills/ff_implement_plan/SKILL.md` | Converted from commands/ff_implement_plan.md |
-| `skills/...` | One directory per skill |
-
-### Files Eventually Removed (Phase 3)
-
-| File | Replacement |
-|------|-------------|
-| `internal/templates/files/.claude/commands/*.md` | `skills/*/SKILL.md` |
-| `internal/templates/files/.claude/stages/*.md` | Absorbed into skills + runner context |
-| `internal/templates/files/.claude/agents/*.md` | Inlined into parent skills |
+3. **`ff_create_plan` size after inlining.** Will push past 600 lines with 4 agent prompts inlined. Acceptable — it's the most complex stage and self-containment is worth the length.
 
 ## Success Criteria
 
-1. `fastflow run --workflow full` completes using skills instead of embedded prompt files
-2. A fresh `fastflow init` produces a repo with no `.claude/commands/` or `.claude/stages/` directories
+1. `fastflow run --workflow full` completes using skills exclusively
+2. `fastflow init` produces a repo with no `.claude/commands/`, `.claude/stages/`, or `.claude/agents/` directories
 3. `fastflow skills install` installs all skills to `~/.claude/skills/fastflow/`
 4. Pre-flight validation catches missing skills with a clear install instruction
-5. Existing repos with `prompt_file` in their `orchestrator.json` continue working unchanged
+5. No `prompt_file` or `requires` references remain in the codebase
 6. Skills are usable outside fastflow via `claude --print "/ff_create_plan <context>"`
+7. Version bump to 0.6 with breaking change documented in CHANGELOG
