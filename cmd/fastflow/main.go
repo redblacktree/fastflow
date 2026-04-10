@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/redblacktree/fastflow/internal/config"
+	"github.com/redblacktree/fastflow/internal/monitor"
 	"github.com/redblacktree/fastflow/internal/output"
 	"github.com/redblacktree/fastflow/internal/runner"
 	"github.com/redblacktree/fastflow/internal/state"
@@ -149,6 +150,25 @@ Examples:
 	RunE: runList,
 }
 
+var monitorCmd = &cobra.Command{
+	Use:   "monitor",
+	Short: "Start a web dashboard for monitoring fastflow runs",
+	Long: `Start a lightweight, read-only web dashboard for monitoring in-flight fastflow runs.
+
+The dashboard shows all active and recent runs across worktrees with their status,
+current stage, timestamps, PID (if live), and log file path.
+
+A JSON API is also available at /api/runs for programmatic access.
+
+Examples:
+  # Start monitor on default port 8080
+  fastflow monitor
+
+  # Start on a custom address
+  fastflow monitor --addr :9090`,
+	RunE: runMonitor,
+}
+
 var cleanCmd = &cobra.Command{
 	Use:   "clean [ticket]",
 	Short: "Remove worktrees",
@@ -191,6 +211,7 @@ var (
 	flagRunForce     bool
 	flagOnComplete   string
 	flagBackground   bool
+	flagMonitorAddr  string
 )
 
 func init() {
@@ -241,12 +262,16 @@ func init() {
 	cleanCmd.Flags().StringVar(&flagCleanPrefix, "prefix", "", "Clean all worktrees matching prefix")
 	cleanCmd.Flags().BoolVar(&flagCleanForce, "force", false, "Skip confirmation prompt")
 
+	// Monitor command flags
+	monitorCmd.Flags().StringVar(&flagMonitorAddr, "addr", ":8080", "Address to listen on")
+
 	// Add commands
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(validateCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(cleanCmd)
+	rootCmd.AddCommand(monitorCmd)
 }
 
 // resolveGoal determines the goal from various input sources in priority order:
@@ -788,174 +813,28 @@ func findExecutable(name string, args ...string) (string, error) {
 	return "", fmt.Errorf("command not found: %s", name)
 }
 
+func runMonitor(cmd *cobra.Command, args []string) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get working directory: %w", err)
+	}
+	fmt.Printf("Starting fastflow monitor at http://localhost%s\n", flagMonitorAddr)
+	srv := &monitor.Server{Addr: flagMonitorAddr, CWD: cwd}
+	return srv.Start()
+}
+
 func runList(cmd *cobra.Command, args []string) error {
 	bold := color.New(color.Bold).SprintFunc()
 	dim := color.New(color.Faint).SprintFunc()
 
-	// Get current working directory
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	// --- Source 1: Worktree-based runs ---
-	type listEntry struct {
-		Ticket  string
-		Status  string
-		Stage   string
-		Created string
-		Summary string
-		Pid     int
-		LogPath string
-	}
-
-	seen := make(map[string]bool)
-	var entries []listEntry
-
-	mgr, err := worktree.NewManager(cwd)
-	if err == nil {
-		worktrees, err := mgr.List()
-		if err == nil {
-			for _, wt := range worktrees {
-				status := "active"
-				if wt.IsOrphan {
-					status = "orphaned"
-				}
-
-				created := ""
-				summary := dim("(no goal file)")
-				stage := ""
-
-				// Try to read ticket info from goal.md
-				for _, loc := range []string{wt.Path, cwd} {
-					if info := worktree.ReadTicketInfo(loc, wt.Ticket); info != nil {
-						if info.Created != "" {
-							created = info.Created
-							if len(created) > 19 {
-								created = created[:19]
-							}
-							created = strings.Replace(created, "T", " ", 1)
-						}
-						if info.Goal != "" {
-							summary = info.Goal
-							if len(summary) > 40 {
-								summary = summary[:37] + "..."
-							}
-						}
-						break
-					}
-				}
-
-				// Try to read state.json for richer status
-				runDir := runner.GetRunDir(wt.Path, wt.Ticket)
-				var entryPid int
-				if st, loadErr := state.Load(runDir); loadErr == nil && st != nil && st.Status != "" {
-					status = st.Status
-					stage = st.Stage
-					// Detect stale runs: status is running but process is dead
-					if status == state.StatusRunning {
-						pid, _ := state.ReadPID(runDir)
-						if pid > 0 {
-							if !state.IsProcessAlive(pid) {
-								status = "stale"
-							} else {
-								entryPid = pid
-							}
-						}
-					}
-				}
-
-				var entryLogPath string
-				logPath := filepath.Join(runDir, "fastflow.log")
-				if _, statErr := os.Stat(logPath); statErr == nil {
-					entryLogPath = logPath
-				}
-
-				entries = append(entries, listEntry{
-					Ticket:  wt.Ticket,
-					Status:  status,
-					Stage:   stage,
-					Created: created,
-					Summary: summary,
-					Pid:     entryPid,
-					LogPath: entryLogPath,
-				})
-				seen[wt.Ticket] = true
-			}
-		}
-	}
-
-	// --- Source 2: State-based runs (non-worktree) from current repo ---
-	stateRuns, _ := state.ScanRunDirs(cwd)
-	for _, run := range stateRuns {
-		if seen[run.Ticket] {
-			continue // Already listed via worktree
-		}
-
-		status := run.State.Status
-		if status == "" {
-			status = "unknown"
-		}
-		// Detect stale runs: status is running but process is dead
-		var entryPid int
-		if status == state.StatusRunning {
-			pid, _ := state.ReadPID(run.RunDir)
-			if pid > 0 {
-				if !state.IsProcessAlive(pid) {
-					status = "stale"
-				} else {
-					entryPid = pid
-				}
-			}
-		}
-		stage := run.State.Stage
-		created := ""
-		summary := dim("(no goal file)")
-
-		// Read goal info
-		if info := worktree.ReadTicketInfo(cwd, run.Ticket); info != nil {
-			if info.Created != "" {
-				created = info.Created
-				if len(created) > 19 {
-					created = created[:19]
-				}
-				created = strings.Replace(created, "T", " ", 1)
-			}
-			if info.Goal != "" {
-				summary = info.Goal
-				if len(summary) > 40 {
-					summary = summary[:37] + "..."
-				}
-			}
-		}
-
-		var entryLogPath string
-		logPath := filepath.Join(run.RunDir, "fastflow.log")
-		if _, statErr := os.Stat(logPath); statErr == nil {
-			entryLogPath = logPath
-		}
-
-		entries = append(entries, listEntry{
-			Ticket:  run.Ticket,
-			Status:  status,
-			Stage:   stage,
-			Created: created,
-			Summary: summary,
-			Pid:     entryPid,
-			LogPath: entryLogPath,
-		})
-		seen[run.Ticket] = true
-	}
-
-	// Filter by prefix if specified
-	if flagListPrefix != "" {
-		var filtered []listEntry
-		for _, e := range entries {
-			if strings.HasPrefix(e.Ticket, flagListPrefix) {
-				filtered = append(filtered, e)
-			}
-		}
-		entries = filtered
+	entries, err := monitor.DiscoverRuns(cwd, flagListPrefix)
+	if err != nil {
+		return fmt.Errorf("failed to discover runs: %w", err)
 	}
 
 	if len(entries) == 0 {
@@ -998,8 +877,15 @@ func runList(cmd *cobra.Command, args []string) error {
 		if e.Pid > 0 {
 			pidStr = fmt.Sprintf(" (pid %d)", e.Pid)
 		}
+		summary := e.Summary
+		if len(summary) > 40 {
+			summary = summary[:37] + "..."
+		}
+		if summary == "(no goal file)" {
+			summary = dim(summary)
+		}
 		output.Printf("%-12s  %-12s  %-12s  %-20s  %s%s\n",
-			e.Ticket, statusFmt, e.Stage, e.Created, e.Summary, pidStr)
+			e.Ticket, statusFmt, e.Stage, e.Created, summary, pidStr)
 		if e.LogPath != "" {
 			output.Printf("%-12s  %s\n", "", dim("Log: "+e.LogPath))
 		}
