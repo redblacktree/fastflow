@@ -2,8 +2,9 @@ package config
 
 import (
 	"fmt"
-	"os"
 	"strings"
+
+	"github.com/redblacktree/fastflow/internal/skills"
 )
 
 // ValidationError represents a configuration validation error.
@@ -44,8 +45,7 @@ func (r *ValidationResult) Error() string {
 // It validates that:
 // - A default workflow exists
 // - All workflows reference valid stages
-// - All stages have either a prompt_file or skill defined
-// - All required dependencies (files) exist
+// - All stages have a skill defined
 func Validate(cfg *Config) *ValidationResult {
 	result := &ValidationResult{}
 
@@ -90,11 +90,11 @@ func Validate(cfg *Config) *ValidationResult {
 
 	// Check stages
 	for name, stage := range cfg.Stages {
-		// Stage must have either prompt_file or skill
-		if stage.PromptFile == "" && stage.Skill == "" {
+		// Stage must have a skill
+		if stage.Skill == "" {
 			result.Errors = append(result.Errors, ValidationError{
 				Field:   fmt.Sprintf("stages.%s", name),
-				Message: "stage must have either prompt_file or skill",
+				Message: "stage must have skill",
 			})
 		}
 
@@ -126,31 +126,34 @@ func Validate(cfg *Config) *ValidationResult {
 	return result
 }
 
-// ValidateDependencies checks that all required files exist.
+// ValidateDependencies checks that all skills referenced by stages are installed.
 // This is separate from Validate() because it requires filesystem access.
 func ValidateDependencies(cfg *Config) *ValidationResult {
 	result := &ValidationResult{}
 
-	for name, stage := range cfg.Stages {
-		// Check prompt file exists (if specified)
-		if stage.PromptFile != "" {
-			if _, err := os.Stat(stage.PromptFile); os.IsNotExist(err) {
-				result.Errors = append(result.Errors, ValidationError{
-					Field:   fmt.Sprintf("stages.%s.prompt_file", name),
-					Message: fmt.Sprintf("file not found: %s", stage.PromptFile),
-				})
-			}
+	// Collect all skill names referenced by stages
+	var skillNames []string
+	for _, stage := range cfg.Stages {
+		if stage.Skill != "" {
+			skillNames = append(skillNames, stage.Skill)
 		}
+	}
 
-		// Check required dependencies exist
-		for i, req := range stage.Requires {
-			if _, err := os.Stat(req); os.IsNotExist(err) {
-				result.Errors = append(result.Errors, ValidationError{
-					Field:   fmt.Sprintf("stages.%s.requires[%d]", name, i),
-					Message: fmt.Sprintf("required file not found: %s", req),
-				})
-			}
-		}
+	// Check skills are installed
+	missing, err := skills.ValidateInstalled(skillNames)
+	if err != nil {
+		result.Errors = append(result.Errors, ValidationError{
+			Field:   "skills",
+			Message: fmt.Sprintf("cannot check skills: %s", err),
+		})
+		return result
+	}
+
+	for _, name := range missing {
+		result.Errors = append(result.Errors, ValidationError{
+			Field:   fmt.Sprintf("skill.%s", name),
+			Message: fmt.Sprintf("skill not installed: run 'fastflow skills install %s'", name),
+		})
 	}
 
 	return result

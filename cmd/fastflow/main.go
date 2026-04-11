@@ -16,6 +16,7 @@ import (
 	"github.com/redblacktree/fastflow/internal/config"
 	"github.com/redblacktree/fastflow/internal/output"
 	"github.com/redblacktree/fastflow/internal/runner"
+	"github.com/redblacktree/fastflow/internal/skills"
 	"github.com/redblacktree/fastflow/internal/state"
 	"github.com/redblacktree/fastflow/internal/templates"
 	"github.com/redblacktree/fastflow/internal/worktree"
@@ -115,10 +116,9 @@ var initCmd = &cobra.Command{
 
 This creates the following:
   - orchestrator.json - Main configuration file
-  - .claude/stages/   - Stage prompt templates
-  - .claude/commands/ - Claude Code skill definitions
-  - .claude/agents/   - Sub-agent configurations
   - thoughts/shared/  - Runtime directories for plans, research, etc.
+
+Skills are installed to ~/.claude/skills/fastflow/ (run 'fastflow skills install' to manage).
 
 Examples:
   # Initialize in current directory
@@ -247,6 +247,7 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(cleanCmd)
+	rootCmd.AddCommand(skillsCmd)
 }
 
 // resolveGoal determines the goal from various input sources in priority order:
@@ -667,12 +668,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 			output.Printf(" %s", warning("[checkpoint]"))
 		}
 		output.Println()
-		if stage.PromptFile != "" {
-			output.Printf("      Prompt: %s\n", stage.PromptFile)
-		}
-		if stage.Skill != "" {
-			output.Printf("      Skill: %s\n", stage.Skill)
-		}
+		output.Printf("      Skill: %s\n", stage.Skill)
 	}
 
 	// Validate dependencies
@@ -757,6 +753,19 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	if !flagDryRun {
+		// Install skills if not already present
+		skillNames, _ := skills.List()
+		missing, _ := skills.ValidateInstalled(skillNames)
+		if len(missing) > 0 {
+			output.Printf("\n%s Installing fastflow skills...\n", info(">>>"))
+			created, _, _, installErr := skills.Install(nil, false)
+			if installErr != nil {
+				return fmt.Errorf("%s Failed to install skills: %w", errColor("ERROR"), installErr)
+			}
+			skillDir, _ := skills.InstallDir()
+			output.Printf("%s Installed %d skill(s) to %s\n", success("OK"), len(created), skillDir)
+		}
+
 		output.Printf("\n%s Fastflow initialized!\n", success("SUCCESS"))
 		output.Printf("\n%s Next steps:\n", info(">>>"))
 		output.Printf("    1. Review orchestrator.json and customize workflows\n")

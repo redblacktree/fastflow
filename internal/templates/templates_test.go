@@ -13,19 +13,18 @@ func TestList(t *testing.T) {
 		t.Fatalf("List() error: %v", err)
 	}
 
-	// Should have 30+ files (templates + .gitkeep files)
-	if len(files) < 30 {
-		t.Errorf("Expected at least 30 files, got %d", len(files))
+	// Should have 5 files: orchestrator.json + 4 .gitkeep files
+	if len(files) != 5 {
+		t.Errorf("Expected 5 files, got %d: %v", len(files), files)
 	}
 
 	// Check for expected files
 	expected := []string{
 		"orchestrator.json",
-		".claude/stages/plan.md",
-		".claude/stages/merge-conflict.md",
-		".claude/commands/ff_create_plan.md",
-		".claude/commands/ff_resolve_conflicts.md",
-		".claude/agents/codebase-locator.md",
+		"thoughts/shared/handoffs/.gitkeep",
+		"thoughts/shared/plans/.gitkeep",
+		"thoughts/shared/research/.gitkeep",
+		"thoughts/shared/runs/.gitkeep",
 	}
 
 	fileMap := make(map[string]bool)
@@ -65,10 +64,10 @@ func TestWrite(t *testing.T) {
 		t.Error("orchestrator.json was not created")
 	}
 
-	// Verify .claude directory structure
+	// Verify .claude directory is NOT created (skills are installed separately)
 	claudeDir := filepath.Join(tmpDir, ".claude")
-	if _, err := os.Stat(claudeDir); os.IsNotExist(err) {
-		t.Error(".claude directory was not created")
+	if _, err := os.Stat(claudeDir); err == nil {
+		t.Error(".claude directory should not be created by templates.Write()")
 	}
 }
 

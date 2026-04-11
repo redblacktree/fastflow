@@ -15,6 +15,7 @@ import (
 	"github.com/redblacktree/fastflow/internal/config"
 	"github.com/redblacktree/fastflow/internal/judge"
 	"github.com/redblacktree/fastflow/internal/output"
+	"github.com/redblacktree/fastflow/internal/skills"
 	"github.com/redblacktree/fastflow/internal/state"
 	"github.com/redblacktree/fastflow/internal/worktree"
 	"github.com/fatih/color"
@@ -81,6 +82,19 @@ func (r *Runner) Run(ctx *RunContext) error {
 	output.Printf("    Ticket: %s\n", ctx.Ticket)
 	output.Printf("    Working directory: %s\n", ctx.WorkDir)
 	output.Printf("    Run directory: %s\n", ctx.RunDir)
+
+	// Pre-flight: check all skills referenced by this workflow are installed
+	var skillNames []string
+	for _, stageName := range workflow.Stages {
+		if stage, ok := r.Config.Stages[stageName]; ok {
+			skillNames = append(skillNames, stage.Skill)
+		}
+	}
+	if missing, err := skills.ValidateInstalled(skillNames); err != nil {
+		return fmt.Errorf("cannot validate skills: %w", err)
+	} else if len(missing) > 0 {
+		return fmt.Errorf("missing skills: %s\nRun: fastflow skills install", strings.Join(missing, ", "))
+	}
 
 	// Determine resume behavior
 	shouldResume, pipelineState, err := r.determineResumeState(ctx, workflow)
@@ -544,13 +558,9 @@ func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.S
 		return nil, err
 	}
 
-	// Execute based on whether it's a skill or prompt file
+	// Execute the stage skill
 	var result *InvokeResult
-	if stage.Skill != "" {
-		result, err = invoker.InvokeWithSkill(stage.Skill, model, prompt)
-	} else {
-		result, err = invoker.Invoke(prompt, model)
-	}
+	result, err = invoker.InvokeWithSkill(stage.Skill, model, prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -715,11 +725,7 @@ Continue the work described in the handoff document. Pick up where the previous 
 	freshInvoker.MaxBudgetUsd = invoker.MaxBudgetUsd
 
 	var resumeResult *InvokeResult
-	if stage.Skill != "" {
-		resumeResult, err = freshInvoker.InvokeWithSkill(stage.Skill, model, resumePrompt)
-	} else {
-		resumeResult, err = freshInvoker.Invoke(resumePrompt, model)
-	}
+	resumeResult, err = freshInvoker.InvokeWithSkill(stage.Skill, model, resumePrompt)
 	if err != nil {
 		return nil, fmt.Errorf("handoff resume failed: %w", err)
 	}
@@ -729,28 +735,9 @@ Continue the work described in the handoff document. Pick up where the previous 
 
 // buildStagePrompt constructs the prompt for a stage.
 func (r *Runner) buildStagePrompt(ctx *RunContext, stageName string, stage *config.Stage) (string, error) {
-	var basePrompt string
-
-	if stage.PromptFile != "" {
-		// Read the prompt file
-		promptPath := config.ResolvePromptFile(r.ConfigPath, stage.PromptFile)
-		content, err := os.ReadFile(promptPath)
-		if err != nil {
-			return "", fmt.Errorf("failed to read prompt file %s: %w", promptPath, err)
-		}
-		basePrompt = string(content)
-	} else {
-		// For skills, provide context
-		basePrompt = ""
-	}
-
-	// Inject placeholders
-	prompt := r.injectPlaceholders(basePrompt, ctx)
-
-	// Prepend goal file reference
+	prompt := r.injectPlaceholders("", ctx)
 	goalPath := filepath.Join(ctx.RunDir, "goal.md")
 	prompt = fmt.Sprintf("First, read the goal file at: %s\n\n%s", goalPath, prompt)
-
 	return prompt, nil
 }
 

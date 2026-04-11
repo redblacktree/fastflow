@@ -3,6 +3,11 @@
   "judge_model": "haiku",
   "default_judge_prompt": "Did this stage complete successfully? Look for clear evidence in the CLI output that the required work was done. Check for: 1) No obvious errors or failures, 2) The work aligns with the original goal. Respond with YES or NO followed by a brief explanation.",
 
+  "defaults": {
+    "maxBudgetUsd": 0,
+    "_maxBudgetNote": "Set maxBudgetUsd to enable automatic context handoff when budget is exhausted. Pricing basis (as of 2025): Sonnet ~$0.60/context window, Opus ~$3.60/context window. Recommended: 2-5x a single context window cost. Set to 0 to disable."
+  },
+
   "workflows": {
     "full": {
       "description": "Complete workflow: research → plan → implement → validate → commit",
@@ -27,8 +32,8 @@
       "ignore_config_change": true
     },
     "review-with-replies": {
-      "description": "Address PR review feedback and reply to comments",
-      "stages": ["fetch-feedback", "implement", "reply-to-comments", "commit"],
+      "description": "Address PR review feedback and post replies",
+      "stages": ["fetch-feedback", "implement", "commit", "reply-to-comments"],
       "skip_goal": true,
       "ignore_config_change": true
     },
@@ -41,59 +46,50 @@
 
   "stages": {
     "research": {
-      "prompt_file": ".claude/stages/research.md",
+      "skill": "research_codebase",
       "model": "sonnet",
-      "requires": [".claude/commands/ff_research_codebase.md"],
       "judge_prompt": "Did the research stage produce useful findings? Check the CLI output for: 1) A research document was written to thoughts/shared/research/, 2) It contains relevant code locations and patterns, 3) It identifies key files related to the goal."
     },
     "debug": {
-      "prompt_file": ".claude/stages/debug.md",
+      "skill": "debug",
       "model": "sonnet",
-      "requires": [".claude/commands/ff_debug.md"],
       "judge_prompt": "Did the debug stage identify the issue? Check the CLI output for: 1) Root cause analysis was performed, 2) A fix or next steps were proposed."
     },
     "plan": {
-      "prompt_file": ".claude/stages/plan.md",
+      "skill": "create_plan",
       "model": "opus",
       "checkpoint": true,
-      "requires": [".claude/commands/ff_create_plan.md"],
       "judge_prompt": "Is the plan complete and actionable? Check the CLI output for: 1) A plan was written to thoughts/shared/plans/, 2) It has clear phases with specific changes, 3) It includes success criteria, 4) No open questions remain."
     },
     "implement": {
-      "prompt_file": ".claude/stages/implement.md",
+      "skill": "implement_plan",
       "model": "sonnet",
-      "requires": [".claude/commands/ff_implement_plan.md"],
       "judge_prompt": "Did implementation make progress? Check the CLI output for: 1) Code changes were made, 2) No critical errors occurred during implementation."
     },
     "validate": {
-      "prompt_file": ".claude/stages/validate.md",
+      "skill": "validate_plan",
       "model": "sonnet",
-      "requires": [".claude/commands/ff_validate_plan.md"],
       "judge_prompt": "Did validation pass? Check the CLI output for: 1) Tests were run, 2) Linting/type checking results, 3) Any failures documented with next steps."
     },
     "commit": {
-      "prompt_file": ".claude/stages/commit.md",
+      "skill": "commit",
       "model": "sonnet",
-      "requires": [".claude/commands/ff_commit.md", ".claude/commands/ff_describe_pr.md"],
       "judge_prompt": "Was the commit/PR created? Check the CLI output for: 1) Changes were committed, 2) A PR was created if requested."
     },
     "fetch-feedback": {
-      "prompt_file": ".claude/stages/fetch-feedback.md",
+      "skill": "fetch_feedback",
       "model": "sonnet",
-      "requires": [],
       "judge_prompt": "Did the fetch-feedback stage gather PR feedback? Check for: 1) PR comments were fetched, 2) A goal.md was written with clear action items from the feedback."
     },
     "merge-conflict": {
-      "prompt_file": ".claude/stages/merge-conflict.md",
+      "skill": "resolve_conflicts",
       "model": "sonnet",
-      "requires": [".claude/commands/ff_resolve_conflicts.md"],
       "judge_prompt": "Did the merge conflict resolution complete? Check the CLI output for: 1) Conflicts were detected and listed, 2) Resolutions were applied, 3) The merge/rebase was completed or the branch was clean."
     },
     "reply-to-comments": {
-      "prompt_file": ".claude/stages/reply-to-comments.md",
+      "skill": "reply_to_comments",
       "model": "sonnet",
-      "requires": [".claude/commands/ff_reply_to_comments.md"],
-      "judge_prompt": "Did the reply-to-comments stage complete? Check the CLI output for: 1) PR comments were identified, 2) Replies were posted to addressed comments, 3) A summary of replies was provided."
+      "judge_prompt": "Did the reply-to-comments stage post replies? Check the CLI output for: 1) PR comments were addressed, 2) Replies were posted."
     }
   }
 }

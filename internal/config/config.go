@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 )
 
@@ -34,9 +33,7 @@ type Workflow struct {
 
 // Stage defines a pipeline stage configuration.
 type Stage struct {
-	PromptFile   string   `json:"prompt_file,omitempty"`
-	Skill        string   `json:"skill,omitempty"`
-	Requires     []string `json:"requires,omitempty"`
+	Skill        string   `json:"skill"`
 	Model        string   `json:"model,omitempty"`
 	Checkpoint   bool     `json:"checkpoint,omitempty"`
 	JudgePrompt  string   `json:"judge_prompt,omitempty"`
@@ -103,18 +100,6 @@ func (c *Config) GetStage(name string) (*Stage, error) {
 		return nil, fmt.Errorf("stage %q not found", name)
 	}
 	return &stage, nil
-}
-
-// ResolvePromptFile resolves a prompt file path relative to the config directory.
-func ResolvePromptFile(configPath, promptFile string) string {
-	if filepath.IsAbs(promptFile) {
-		return promptFile
-	}
-	configDir := filepath.Dir(configPath)
-	if configDir == "." {
-		return promptFile
-	}
-	return filepath.Join(configDir, promptFile)
 }
 
 func workflowNames(workflows map[string]Workflow) []string {
