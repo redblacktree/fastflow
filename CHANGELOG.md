@@ -27,9 +27,78 @@
 
 ### Migration
 
-Users upgrading from v0.5 to v0.6 must:
+Users upgrading from v0.5 to v0.6 must handle both a machine-level change and, for existing repos, a repo-level config change.
 
-1. Run `fastflow skills install` to install skills
-2. Update their `orchestrator.json` to use `skill` instead of `prompt_file`/`requires`
-3. Delete `.claude/{commands,stages,agents}/` from their repos (optional but recommended)
-4. Re-run `fastflow init --force` to get the updated `orchestrator.json` template
+#### Machine-level
+
+Run this once after upgrading the fastflow binary:
+
+```bash
+fastflow skills install
+```
+
+This installs all built-in fastflow skills to `~/.claude/skills/fastflow/`. There is no separate migration skill and no need to install stages one by one.
+
+#### Existing repos initialized with v0.5
+
+Existing repos must update `orchestrator.json` to use `skill` instead of `prompt_file` and `requires`, then validate:
+
+```bash
+fastflow validate
+```
+
+If the repo still uses the stock generated config, you can refresh it with:
+
+```bash
+fastflow init --force
+```
+
+If the repo has custom workflow edits, update `orchestrator.json` manually instead of overwriting it.
+
+Minimal example:
+
+Before:
+
+```json
+{
+  "plan": {
+    "prompt_file": ".claude/stages/plan.md",
+    "model": "opus",
+    "checkpoint": true,
+    "requires": [".claude/commands/ff_create_plan.md"]
+  }
+}
+```
+
+After:
+
+```json
+{
+  "plan": {
+    "skill": "create_plan",
+    "model": "opus",
+    "checkpoint": true
+  }
+}
+```
+
+#### Optional cleanup
+
+After migrating an older repo, delete these legacy directories if present:
+
+```text
+.claude/commands/
+.claude/stages/
+.claude/agents/
+```
+
+#### New repos
+
+New repos only need:
+
+```bash
+fastflow init
+fastflow validate
+```
+
+`fastflow init` writes the new config format and auto-installs skills if they are missing.

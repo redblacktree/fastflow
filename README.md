@@ -50,6 +50,12 @@ go build -o fastflow ./cmd/fastflow
 fastflow run --goal "Add user authentication" --ticket ENG-1234
 ```
 
+### Initialize a repository
+
+```bash
+fastflow init
+```
+
 ### Available workflows
 
 - **full** (default): research → plan → implement → validate → commit
@@ -82,6 +88,102 @@ fastflow uses `orchestrator.json` for workflow configuration. See the included c
 - Configuring stage models (sonnet, opus, haiku)
 - Setting up checkpoints for human review
 - Custom judge prompts for stage validation
+
+## Upgrading to v0.6
+
+v0.6 replaces embedded prompt files with Claude Code skills. This is a breaking change.
+
+### What changed
+
+- Stages now use `skill` instead of `prompt_file` and `requires`
+- `fastflow init` no longer creates `.claude/commands`, `.claude/stages`, or `.claude/agents`
+- Fastflow skills are installed to `~/.claude/skills/fastflow/`
+
+### Machine-level upgrade
+
+Run this once on each machine after upgrading the fastflow binary:
+
+```bash
+fastflow skills install
+```
+
+This installs all built-in fastflow skills. You do not need to install workflow items one by one.
+
+### New repositories
+
+For new repositories, just run:
+
+```bash
+fastflow init
+fastflow validate
+```
+
+`fastflow init` will create the new `orchestrator.json` format and auto-install skills if needed.
+
+### Existing repositories initialized with v0.5
+
+Existing repos need both of these changes:
+
+1. Install skills on the machine:
+
+```bash
+fastflow skills install
+```
+
+2. Update the repo's `orchestrator.json` to use `skill` fields instead of `prompt_file` and `requires`
+
+Then verify:
+
+```bash
+fastflow validate
+```
+
+If your repo is still using the stock generated `orchestrator.json`, you can refresh it with:
+
+```bash
+fastflow init --force
+```
+
+If you have customized `orchestrator.json`, update it manually instead of overwriting it.
+
+### Minimal config migration example
+
+Before:
+
+```json
+{
+  "plan": {
+    "prompt_file": ".claude/stages/plan.md",
+    "model": "opus",
+    "checkpoint": true,
+    "requires": [".claude/commands/ff_create_plan.md"]
+  }
+}
+```
+
+After:
+
+```json
+{
+  "plan": {
+    "skill": "create_plan",
+    "model": "opus",
+    "checkpoint": true
+  }
+}
+```
+
+### Optional cleanup for existing repos
+
+After migrating an older repo, you can delete these legacy directories if they are still present:
+
+```text
+.claude/commands/
+.claude/stages/
+.claude/agents/
+```
+
+They are no longer used by v0.6.
 
 ## Acknowledgements
 
