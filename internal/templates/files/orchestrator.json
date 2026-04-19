@@ -34,6 +34,10 @@
     "merge-conflict": {
       "description": "Resolve merge or rebase conflicts",
       "stages": ["merge-conflict"]
+    },
+    "codex-quick": {
+      "description": "Two-stage Codex workflow: implement and commit. Requires .codex/stages/* templates.",
+      "stages": ["implement-codex", "commit-codex"]
     }
   },
 
@@ -87,6 +91,16 @@
       "model": "sonnet",
       "requires": [".claude/commands/ff_resolve_conflicts.md"],
       "judge_prompt": "Did the merge conflict resolution complete? Check the CLI output for: 1) Conflicts were detected and listed, 2) Resolutions were applied, 3) The merge/rebase was completed or the branch was clean."
+    },
+    "implement-codex": {
+      "backend": "codex",
+      "prompt_file": ".codex/stages/implement.md",
+      "judge_prompt": "Did implementation make progress? Check the CLI output for code changes and absence of critical errors."
+    },
+    "commit-codex": {
+      "backend": "codex",
+      "prompt_file": ".codex/stages/commit.md",
+      "judge_prompt": "Was the commit created successfully? Look for a git commit hash in the output."
     }
   }
 }
