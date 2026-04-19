@@ -1,31 +1,96 @@
 package judge
 
 import (
-	"os"
-	"strings"
 	"testing"
+
+	"github.com/redblacktree/fastflow/internal/backend"
 )
 
-func TestIsInvalidAPIKey(t *testing.T) {
-	if !isInvalidAPIKey(`authentication_error`) {
-		t.Error("should detect 'authentication_error'")
+// fakeBackend is a minimal backend.Backend for testing the judge.
+type fakeBackend struct {
+	output string
+	err    error
+}
+
+func (f *fakeBackend) Name() string                                         { return "fake" }
+func (f *fakeBackend) DefaultModel() string                                 { return "fake-model" }
+func (f *fakeBackend) Capabilities() backend.Capabilities                  { return backend.Capabilities{} }
+func (f *fakeBackend) Invoke(_ backend.InvokeOptions) (*backend.InvokeResult, error) {
+	if f.err != nil {
+		return nil, f.err
 	}
-	if !isInvalidAPIKey(`invalid x-api-key`) {
-		t.Error("should detect 'invalid x-api-key'")
+	return &backend.InvokeResult{Output: f.output}, nil
+}
+
+func TestNewJudge_DefaultsModel(t *testing.T) {
+	fb := &fakeBackend{}
+	j := NewJudge(fb, "")
+	if j.Model != "fake-model" {
+		t.Errorf("Model = %q, want fake-model", j.Model)
 	}
-	if isInvalidAPIKey("Normal judge output YES: looks good") {
-		t.Error("should not trigger on normal output")
+	if j.MaxTurns != 5 {
+		t.Errorf("MaxTurns = %d, want 5", j.MaxTurns)
 	}
 }
 
-func TestEnvWithoutAPIKey(t *testing.T) {
-	os.Setenv("ANTHROPIC_API_KEY", "test-key")
-	defer os.Unsetenv("ANTHROPIC_API_KEY")
+func TestNewJudge_ExplicitModel(t *testing.T) {
+	fb := &fakeBackend{}
+	j := NewJudge(fb, "haiku")
+	if j.Model != "haiku" {
+		t.Errorf("Model = %q, want haiku", j.Model)
+	}
+}
 
-	filtered := envWithoutAPIKey()
-	for _, env := range filtered {
-		if strings.HasPrefix(env, "ANTHROPIC_API_KEY=") {
-			t.Error("ANTHROPIC_API_KEY should be filtered out")
-		}
+func TestParseResponse_Yes(t *testing.T) {
+	fb := &fakeBackend{output: "YES: it worked great"}
+	j := NewJudge(fb, "m")
+	res, err := j.Evaluate(&EvaluationContext{JudgePrompt: "did it work?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Success {
+		t.Error("expected Success=true")
+	}
+	if res.Reasoning != "it worked great" {
+		t.Errorf("Reasoning = %q", res.Reasoning)
+	}
+}
+
+func TestParseResponse_No(t *testing.T) {
+	fb := &fakeBackend{output: "NO: missing output file"}
+	j := NewJudge(fb, "m")
+	res, err := j.Evaluate(&EvaluationContext{JudgePrompt: "did it work?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Success {
+		t.Error("expected Success=false")
+	}
+	if res.Reasoning != "missing output file" {
+		t.Errorf("Reasoning = %q", res.Reasoning)
+	}
+}
+
+func TestParseResponse_Interactive(t *testing.T) {
+	fb := &fakeBackend{output: "INTERACTIVE: which branch should I use?"}
+	j := NewJudge(fb, "m")
+	res, err := j.Evaluate(&EvaluationContext{JudgePrompt: "did it work?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Interactive {
+		t.Error("expected Interactive=true")
+	}
+}
+
+func TestParseResponse_Unparseable(t *testing.T) {
+	fb := &fakeBackend{output: "I think it went well"}
+	j := NewJudge(fb, "m")
+	res, err := j.Evaluate(&EvaluationContext{JudgePrompt: "did it work?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Success {
+		t.Error("expected Success=false for unparseable response")
 	}
 }
