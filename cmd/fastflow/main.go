@@ -716,6 +716,9 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("configuration validation failed")
 	}
 	output.Printf("%s Configuration structure valid\n", success("OK"))
+	for _, w := range result.Warnings {
+		output.Printf("%s %s: %s\n", warning("WARN"), w.Field, w.Message)
+	}
 
 	// Show workflows
 	output.Printf("\n%s Workflows:\n", bold("Configured"))

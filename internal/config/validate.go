@@ -18,9 +18,10 @@ func (e ValidationError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Field, e.Message)
 }
 
-// ValidationResult contains all validation errors found.
+// ValidationResult contains all validation errors and warnings found.
 type ValidationResult struct {
-	Errors []ValidationError
+	Errors   []ValidationError
+	Warnings []ValidationError
 }
 
 // IsValid returns true if no validation errors were found.
@@ -80,6 +81,41 @@ func Validate(cfg *Config) *ValidationResult {
 			Field:   "judge_backend",
 			Message: err.Error(),
 		})
+	}
+
+	// Warn when a non-Claude global backend is paired with stages that use
+	// Claude slash-command paths (.claude/). Those stages will fail at runtime
+	// because Codex (and other non-Claude backends) cannot execute slash-command
+	// skills. Users should either set backend per-stage or author backend-specific
+	// prompt files that do not rely on /slash-commands.
+	if globalBackend != "claude" {
+		for stageName, stage := range cfg.Stages {
+			effectiveBackend := stage.Backend
+			if effectiveBackend == "" {
+				effectiveBackend = globalBackend
+			}
+			if effectiveBackend == "claude" {
+				continue
+			}
+			usesClaudePaths := strings.Contains(stage.PromptFile, ".claude/")
+			if !usesClaudePaths {
+				for _, req := range stage.Requires {
+					if strings.Contains(req, ".claude/") {
+						usesClaudePaths = true
+						break
+					}
+				}
+			}
+			if usesClaudePaths {
+				result.Warnings = append(result.Warnings, ValidationError{
+					Field: fmt.Sprintf("stages.%s", stageName),
+					Message: fmt.Sprintf(
+						"stage uses .claude/ paths but will run under backend %q, which cannot execute Claude slash-command skills; the stage will fail at runtime",
+						effectiveBackend,
+					),
+				})
+			}
+		}
 	}
 
 	// Check workflows
