@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fastflow Monitor</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #1a1f2e;
+      border-bottom: 1px solid #2d3748;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    header h1 {
+      font-size: 16px;
+      font-weight: 600;
+      color: #e2e8f0;
+      letter-spacing: 0.05em;
+    }
+
+    header h1 span {
+      color: #63b3ed;
+    }
+
+    .refresh-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #718096;
+      font-size: 12px;
+    }
+
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #48bb78;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .stats-bar {
+      background: #161b27;
+      border-bottom: 1px solid #2d3748;
+      padding: 10px 24px;
+      display: flex;
+      gap: 24px;
+    }
+
+    .stat {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #718096;
+      font-size: 12px;
+    }
+
+    .stat-value {
+      font-weight: 600;
+      color: #e2e8f0;
+    }
+
+    .stat-label { color: #718096; }
+
+    .main {
+      padding: 16px 24px;
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 800px;
+    }
+
+    thead th {
+      text-align: left;
+      padding: 8px 12px;
+      color: #718096;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      border-bottom: 1px solid #2d3748;
+      white-space: nowrap;
+    }
+
+    tbody tr {
+      border-bottom: 1px solid #1e2433;
+      transition: background 0.1s;
+    }
+
+    tbody tr:hover { background: #1a1f2e; }
+
+    td {
+      padding: 10px 12px;
+      vertical-align: top;
+      white-space: nowrap;
+    }
+
+    .ticket { font-weight: 600; color: #90cdf4; }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+    }
+
+    .badge-running  { background: #1a365d; color: #63b3ed; }
+    .badge-complete { background: #1c4532; color: #68d391; }
+    .badge-failed   { background: #4a1515; color: #fc8181; }
+    .badge-stale    { background: #4a1515; color: #fbb6b6; }
+    .badge-checkpoint { background: #2d3748; color: #a0aec0; }
+    .badge-default  { background: #2d3748; color: #a0aec0; }
+
+    .stage { color: #a0aec0; }
+    .worktree { color: #718096; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+    .ts { color: #718096; font-size: 12px; }
+    .pid { color: #a0aec0; }
+
+    .log-path {
+      color: #4a5568;
+      font-size: 11px;
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+    }
+
+    .log-path:hover { color: #718096; }
+
+    .empty-state {
+      text-align: center;
+      padding: 60px 24px;
+      color: #4a5568;
+    }
+
+    .empty-state p { margin-top: 8px; font-size: 12px; }
+
+    footer {
+      padding: 12px 24px;
+      color: #4a5568;
+      font-size: 11px;
+      border-top: 1px solid #1e2433;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Fastflow <span>Monitor</span></h1>
+    <div class="refresh-indicator">
+      <div class="pulse-dot"></div>
+      <span id="last-refresh">Loading…</span>
+    </div>
+  </header>
+
+  <div class="stats-bar" id="stats-bar">
+    <div class="stat"><span class="stat-value" id="stat-total">—</span><span class="stat-label">total</span></div>
+    <div class="stat"><span class="stat-value" id="stat-running" style="color:#63b3ed">—</span><span class="stat-label">running</span></div>
+    <div class="stat"><span class="stat-value" id="stat-complete" style="color:#68d391">—</span><span class="stat-label">complete</span></div>
+    <div class="stat"><span class="stat-value" id="stat-failed" style="color:#fc8181">—</span><span class="stat-label">failed</span></div>
+    <div class="stat"><span class="stat-value" id="stat-stale" style="color:#fbb6b6">—</span><span class="stat-label">stale</span></div>
+  </div>
+
+  <div class="main">
+    <table id="runs-table">
+      <thead>
+        <tr>
+          <th>Ticket</th>
+          <th>Status</th>
+          <th>Stage</th>
+          <th>Worktree</th>
+          <th>Started</th>
+          <th>Updated</th>
+          <th>PID</th>
+          <th>Log</th>
+        </tr>
+      </thead>
+      <tbody id="runs-body">
+        <tr><td colspan="8"><div class="empty-state">Loading runs…</div></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer>
+    <div class="pulse-dot" style="width:6px;height:6px;background:#4a5568"></div>
+    Auto-refreshing every 5s · Read-only monitor
+  </footer>
+
+  <script>
+    function badgeClass(status) {
+      switch (status) {
+        case 'running':    return 'badge-running';
+        case 'complete':   return 'badge-complete';
+        case 'failed':     return 'badge-failed';
+        case 'stale':      return 'badge-stale';
+        case 'checkpoint': return 'badge-checkpoint';
+        default:           return 'badge-default';
+      }
+    }
+
+    function shortenPath(p) {
+      if (!p) return '—';
+      const home = '/Users/';
+      const idx = p.indexOf(home);
+      if (idx !== -1) {
+        const afterHome = p.slice(idx + home.length);
+        const slash = afterHome.indexOf('/');
+        if (slash !== -1) return '~/' + afterHome.slice(slash + 1);
+      }
+      return p;
+    }
+
+    function formatTS(ts) {
+      if (!ts) return '—';
+      return ts.replace('T', ' ').slice(0, 19);
+    }
+
+    function render(runs) {
+      const tbody = document.getElementById('runs-body');
+
+      // Update stats
+      const counts = { running: 0, complete: 0, failed: 0, stale: 0 };
+      for (const r of runs) {
+        if (counts[r.status] !== undefined) counts[r.status]++;
+      }
+      document.getElementById('stat-total').textContent = runs.length;
+      document.getElementById('stat-running').textContent = counts.running;
+      document.getElementById('stat-complete').textContent = counts.complete;
+      document.getElementById('stat-failed').textContent = counts.failed;
+      document.getElementById('stat-stale').textContent = counts.stale;
+
+      if (runs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state">No runs found.<p>Start a fastflow run to see it here.</p></div></td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = runs.map(r => `
+        <tr>
+          <td class="ticket">${esc(r.ticket)}</td>
+          <td><span class="badge ${badgeClass(r.status)}">${esc(r.status)}</span></td>
+          <td class="stage">${esc(r.stage || '—')}</td>
+          <td class="worktree" title="${esc(r.work_dir || '')}">${esc(shortenPath(r.work_dir))}</td>
+          <td class="ts">${esc(formatTS(r.created))}</td>
+          <td class="ts">${esc(formatTS(r.updated_at))}</td>
+          <td class="pid">${r.pid ? r.pid : '—'}</td>
+          <td class="log-path" title="${esc(r.log_path || '')}" onclick="copyText(this)">${esc(shortenPath(r.log_path))}</td>
+        </tr>
+      `).join('');
+    }
+
+    function esc(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function copyText(el) {
+      const text = el.title || el.textContent;
+      if (navigator.clipboard) navigator.clipboard.writeText(text);
+    }
+
+    async function refresh() {
+      try {
+        const resp = await fetch('/api/runs');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const runs = await resp.json();
+        render(runs);
+        document.getElementById('last-refresh').textContent = 'Last refreshed ' + new Date().toLocaleTimeString();
+      } catch (e) {
+        document.getElementById('last-refresh').textContent = 'Error: ' + e.message;
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>

@@ -80,6 +80,33 @@ fastflow run --goal "Refactor auth system" --ticket ENG-1237 --no-review
 fastflow validate
 ```
 
+### Monitor
+
+Start a web dashboard for monitoring in-flight fastflow runs:
+
+```bash
+fastflow monitor
+```
+
+Open `http://localhost:8080` in a browser to view the dashboard. The dashboard shows all active and recent runs with their ticket, status, current stage, timestamps, PID (if live), and log file path. It auto-refreshes every 5 seconds.
+
+Options:
+- `--addr` — Address to listen on (default: `:8080`)
+
+```bash
+# Use a custom address
+fastflow monitor --addr :9090
+```
+
+#### API
+
+The monitor also exposes a JSON API:
+
+- `GET /api/runs` — Returns all runs as a JSON array
+- `GET /api/runs?prefix=ENG-` — Filter runs by ticket prefix
+
+Each entry includes: `ticket`, `status`, `stage`, `created`, `updated_at`, `pid`, `log_path`, `work_dir`, `run_dir`.
+
 ## Configuration
 
 fastflow uses `orchestrator.json` for workflow configuration. See the included config for examples of:
