@@ -12,8 +12,10 @@ Goal → Worktree → Research → Plan → Implement → Validate → Commit/PR
 
 Each stage communicates via markdown files in `thoughts/`, enabling clean handoffs between agent contexts.
 
-The default backend is **Claude Code**. You can switch to **OpenAI Codex CLI** globally or per-stage
-via the `"backend"` field in `orchestrator.json`. See [docs/backends.md](docs/backends.md) for the
+The default backend is **Claude Code**. You can also run stages using **OpenAI Codex CLI** by
+setting `"backend": "codex"` on individual stages (or using the built-in `codex-quick` workflow).
+The default Claude workflows use Claude slash-command skills that Codex cannot execute, so Codex
+works per-stage rather than as a global drop-in. See [docs/backends.md](docs/backends.md) for the
 full capability matrix, setup instructions, and how to add new backends.
 
 ## Prerequisites

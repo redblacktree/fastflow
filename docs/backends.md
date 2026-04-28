@@ -32,6 +32,16 @@ top-level `backend` field, which defaults to `"claude"`.
 Existing `orchestrator.json` files that omit these fields continue to work
 unchanged — the `backend` field defaults to `"claude"`.
 
+> **Important:** Setting `"backend": "codex"` at the top level does **not** make
+> the default workflows (`full`, `plan-first`, `debug`, `quick`, `review`) work
+> with Codex. Those workflows use Claude slash-command skills (e.g.
+> `/ff_create_plan`, `/ff_implement_plan`) that Codex cannot resolve. Codex is
+> only supported via the dedicated `codex-quick` workflow (and its
+> `implement-codex` / `commit-codex` stages) or custom Codex-specific stages
+> you author yourself. Use `"backend"` as a per-stage override, not a global
+> drop-in replacement, unless you have authored Codex-compatible prompts for
+> every stage.
+
 ## Capability Matrix
 
 | Capability | Claude Code | Codex CLI | GitHub Copilot CLI* |
@@ -88,7 +98,10 @@ No additional configuration is needed. Omitting `"backend"` from
 3. Author Codex-friendly stage prompts under `.codex/stages/` that **do not
    rely on `/slash-commands`**. See
    `internal/templates/files/.codex/stages/` for starter templates.
-4. Set `"backend": "codex"` globally or per-stage in `orchestrator.json`.
+4. Set `"backend": "codex"` on the specific stages (or use the built-in
+   `codex-quick` workflow). Do **not** set it as the global `backend` unless
+   every stage in your workflow has a Codex-compatible prompt file that does
+   not use Claude slash-command skills.
 
 Codex does not support `--max-turns` or `--max-budget-usd`. fastflow ignores
 those fields on Codex stages with a runtime warning.
