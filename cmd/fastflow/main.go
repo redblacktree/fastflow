@@ -20,6 +20,7 @@ import (
 	"github.com/redblacktree/fastflow/internal/runner"
 	"github.com/redblacktree/fastflow/internal/state"
 	"github.com/redblacktree/fastflow/internal/templates"
+	"github.com/redblacktree/fastflow/internal/workspace"
 	"github.com/redblacktree/fastflow/internal/worktree"
 	"github.com/spf13/cobra"
 )
@@ -208,14 +209,16 @@ var (
 	flagCleanPrefix string
 	flagCleanForce  bool
 	flagNoWorktree  bool
-	flagNoFetch     bool
-	flagVerbose     bool
-	flagLogFile     string
-	flagNoColor     bool
-	flagRunForce    bool
-	flagOnComplete  string
-	flagBackground  bool
-	flagMonitorAddr string
+	flagNoFetch                 bool
+	flagVerbose                 bool
+	flagLogFile                 string
+	flagNoColor                 bool
+	flagRunForce                bool
+	flagOnComplete              string
+	flagBackground              bool
+	flagBlockedWorkspacePrefix  []string
+	flagAllowUntrustedWorkspace bool
+	flagMonitorAddr             string
 )
 
 func init() {
@@ -251,6 +254,10 @@ func init() {
 			"FASTFLOW_STATUS, FASTFLOW_WORKTREE, FASTFLOW_RUN_DIR, FASTFLOW_ERROR, "+
 			"FASTFLOW_WORKFLOW. Times out after 5 minutes. See README for examples.")
 	runCmd.Flags().BoolVar(&flagBackground, "background", false, "Run in background (detach from terminal)")
+	runCmd.Flags().StringArrayVar(&flagBlockedWorkspacePrefix, "blocked-workspace-prefix", nil,
+		"Refuse to run when cwd is under any of these path prefixes (repeatable; supports ~/)")
+	runCmd.Flags().BoolVar(&flagAllowUntrustedWorkspace, "allow-untrusted-workspace", false,
+		"Bypass workspace-trust validation (no origin remote / blocked prefix)")
 
 	// Only ticket is required - goal can come from multiple sources
 	_ = runCmd.MarkFlagRequired("ticket")
@@ -476,6 +483,21 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
+	// Verify workspace trust before mutating any state.
+	trustOpts := workspace.TrustOpts{
+		BlockedPrefixes: append(flagBlockedWorkspacePrefix,
+			splitColonList(os.Getenv("FASTFLOW_BLOCKED_WORKSPACE_PREFIXES"))...),
+		Allow: flagAllowUntrustedWorkspace || os.Getenv("FASTFLOW_ALLOW_UNTRUSTED_WORKSPACE") == "1",
+	}
+	trust, err := workspace.VerifyTrustedWorkspace(cwd, trustOpts)
+	if err != nil {
+		return fmt.Errorf("%s %v", errColor("ERROR"), err)
+	}
+	output.Printf("    Repo:   %s\n", trust.RepoRoot)
+	if trust.OriginURL != "" {
+		output.Printf("    Origin: %s\n", trust.OriginURL)
+	}
+
 	// Setup worktree (or use current directory)
 	workDir := cwd
 	branchName := flagTicket
@@ -643,6 +665,20 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return r.RunSingleStage(ctx)
 	}
 	return r.Run(ctx)
+}
+
+// splitColonList splits a colon-separated list, ignoring empty elements.
+func splitColonList(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(s, ":") {
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func runValidate(cmd *cobra.Command, args []string) error {
