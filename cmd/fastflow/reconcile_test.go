@@ -179,6 +179,68 @@ func TestRunReconcileStaleHandoff_apply_REL548_pre_writesRecordFile(t *testing.T
 	}
 }
 
+func TestRunReconcileStaleHandoff_applyMissingConfigRefusesBeforeMutation(t *testing.T) {
+	_, cleanup := captureOutput(t)
+	defer cleanup()
+
+	tests := []struct {
+		name    string
+		mutate  func(*reconcile.Config)
+		wantErr string
+	}{
+		{
+			name: "missing team",
+			mutate: func(cfg *reconcile.Config) {
+				cfg.TeamID = ""
+			},
+			wantErr: "LINEAR_TEAM_ID/--team",
+		},
+		{
+			name: "missing in review state",
+			mutate: func(cfg *reconcile.Config) {
+				cfg.InReviewStateID = ""
+			},
+			wantErr: "LINEAR_IN_REVIEW_STATE_ID/--in-review-state",
+		},
+		{
+			name: "missing qa assignee",
+			mutate: func(cfg *reconcile.Config) {
+				cfg.QAAssigneeID = ""
+			},
+			wantErr: "LINEAR_QA_ASSIGNEE_ID/--qa-assignee",
+		},
+		{
+			name: "missing review assignee",
+			mutate: func(cfg *reconcile.Config) {
+				cfg.ReviewAssigneeID = ""
+			},
+			wantErr: "LINEAR_REVIEW_ASSIGNEE_ID/--review-assignee",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testReconcileCfg
+			tt.mutate(&cfg)
+			client := &fakeClient{issue: makeREL548Pre()}
+
+			err := runReconcileStaleHandoffWith("REL-548", true, cfg, client, t.TempDir())
+			if err == nil {
+				t.Fatal("expected missing config error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error %q does not mention %q", err.Error(), tt.wantErr)
+			}
+			if client.createCount != 0 {
+				t.Fatalf("expected no issue mutations, got %d CreateIssue calls", client.createCount)
+			}
+			if len(client.comments) != 0 {
+				t.Fatalf("expected no comment mutations, got %d CreateComment calls", len(client.comments))
+			}
+		})
+	}
+}
+
 func TestRunReconcileStaleHandoff_apply_post_repair_exits_zero_with_no_op(t *testing.T) {
 	buf, cleanup := captureOutput(t)
 	defer cleanup()

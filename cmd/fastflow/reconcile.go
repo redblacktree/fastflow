@@ -131,6 +131,10 @@ func runReconcileStaleHandoffWith(
 		return nil
 	}
 
+	if err := validateStaleHandoffApplyConfig(cfg); err != nil {
+		return fmt.Errorf("%s %w", errColor("ERROR"), err)
+	}
+
 	if err := os.MkdirAll(runDir, 0755); err != nil {
 		return fmt.Errorf("%s failed to create run dir: %w", errColor("ERROR"), err)
 	}
@@ -162,6 +166,26 @@ func runReconcileStaleHandoffWith(
 	output.Printf("  QA child:       %s\n", record.QAChildIdentifier)
 	output.Printf("  Review child:   %s\n", record.ReviewChildIdentifier)
 	output.Printf("  Repair pointer: %s\n", record.RepairPointerID)
+	return nil
+}
+
+func validateStaleHandoffApplyConfig(cfg reconcile.Config) error {
+	missing := []string{}
+	if strings.TrimSpace(cfg.TeamID) == "" {
+		missing = append(missing, "LINEAR_TEAM_ID/--team")
+	}
+	if strings.TrimSpace(cfg.InReviewStateID) == "" {
+		missing = append(missing, "LINEAR_IN_REVIEW_STATE_ID/--in-review-state")
+	}
+	if strings.TrimSpace(cfg.QAAssigneeID) == "" {
+		missing = append(missing, "LINEAR_QA_ASSIGNEE_ID/--qa-assignee")
+	}
+	if strings.TrimSpace(cfg.ReviewAssigneeID) == "" {
+		missing = append(missing, "LINEAR_REVIEW_ASSIGNEE_ID/--review-assignee")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("apply requires all Linear repair config before mutations; missing: %s", strings.Join(missing, ", "))
+	}
 	return nil
 }
 
