@@ -68,6 +68,40 @@ fastflow run --goal "Fix login timeout bug" --ticket ENG-1236 --workflow debug
 fastflow run --goal "Refactor auth system" --ticket ENG-1237 --no-review
 ```
 
+### Background runs
+
+To launch a workflow in the background (detached from the terminal), pass `--background`:
+
+```bash
+fastflow run --goal "Add user authentication" --ticket ENG-1234 --background
+```
+
+fastflow re-execs itself as a detached process, writes all output to `fastflow.log` inside the run directory, and returns immediately. Use `fastflow monitor` to track progress.
+
+### Workspace trust
+
+By default fastflow accepts any working directory. In environments where runs must be confined to trusted paths (e.g. to prevent a stale workspace mirror from being targeted accidentally), use the blocked-prefix guardrail:
+
+```bash
+# Block a specific path prefix at invocation time
+fastflow run --goal "..." --ticket ENG-1 \
+  --blocked-workspace-prefix /Users/me/.openclaw
+
+# Block multiple prefixes (repeat the flag)
+fastflow run --goal "..." --ticket ENG-1 \
+  --blocked-workspace-prefix /tmp \
+  --blocked-workspace-prefix /private/tmp
+```
+
+The same prefixes can be set via the environment variable `FASTFLOW_BLOCKED_WORKSPACE_PREFIXES` (colon-separated list):
+
+```bash
+export FASTFLOW_BLOCKED_WORKSPACE_PREFIXES=/Users/me/.openclaw:/tmp
+fastflow run --goal "..." --ticket ENG-1
+```
+
+If the resolved working directory falls under any blocked prefix, `fastflow run` exits immediately with a non-zero status. To bypass the check in a trusted one-off scenario, pass `--allow-untrusted-workspace` (or set `FASTFLOW_ALLOW_UNTRUSTED_WORKSPACE=1`).
+
 ### Validate configuration
 
 ```bash

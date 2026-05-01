@@ -29,6 +29,16 @@ go test ./...
 ./fastflow validate
 ```
 
+## Working directories
+
+fastflow's workspace-trust guardrail (`internal/workspace/trust.go`) checks the resolved working directory against a list of blocked path prefixes before any run starts. This prevents accidental runs against stale workspace mirrors (e.g. `~/.openclaw/workspace/*`).
+
+When writing tests or tooling that invokes `fastflow run`:
+
+- **Always use the canonical repo worktree** (e.g. `/Users/you/repos/fastflow` or a worktree under `/Users/you/wt/fastflow/`). Do not invoke fastflow from a path inside a stale mirror.
+- If you need to test the guardrail itself, see `internal/workspace/trust_test.go` for examples of how to construct a temporary git repo and verify that blocked prefixes are refused.
+- The `--allow-untrusted-workspace` flag (or `FASTFLOW_ALLOW_UNTRUSTED_WORKSPACE=1`) exists for integration tests that must run from an arbitrary directory; avoid using it in production scripts.
+
 ## Code Style
 
 - Follow standard Go conventions
