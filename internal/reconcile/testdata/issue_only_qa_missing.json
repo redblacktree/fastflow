@@ -1,0 +1,24 @@
+{
+  "id": "aaa00zzz-0000-0000-0000-000000000000",
+  "identifier": "REL-601",
+  "title": "Issue with only QA child missing",
+  "url": "https://linear.app/relevant-notion/issue/REL-601/only-qa-missing",
+  "state": { "id": "state-in-progress-id", "name": "In Progress", "type": "started" },
+  "children": [
+    {
+      "id": "aaa00rev-0000-0000-0000-000000000000",
+      "identifier": "REL-602",
+      "title": "Review: Issue with only QA child missing",
+      "state": { "id": "state-in-progress-id", "name": "In Progress", "type": "started" },
+      "children": [],
+      "comments": []
+    }
+  ],
+  "comments": [
+    {
+      "id": "cmt-handoff-601",
+      "body": "Q HANDOFF / RETEST READY\n\nBranch: REL-601\nReady for review.",
+      "createdAt": "2026-04-15T10:00:00.000Z"
+    }
+  ]
+}

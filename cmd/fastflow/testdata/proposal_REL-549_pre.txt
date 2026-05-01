@@ -1,0 +1,20 @@
+PROPOSAL: REL-549 — stale handoff detected
+  parent id              aaa00549-0000-0000-0000-000000000000
+  parent state           In Progress
+  source comment id      e0a0b191
+  missing lanes          QA, Review
+  intended QA child      "QA: Implement fastflow monitor web dashboard" → assignee test-qa-assignee-id
+  intended Review child  "Review: Implement fastflow monitor web dashboard" → assignee test-review-assignee-id
+  parent state change    In Progress → In Review
+  derived PR             https://github.com/redblacktree/fastflow/pull/41
+  derived branch         REL-549
+
+Boundary (verbatim, will be copied to QA child):
+  | Q HANDOFF / RETEST READY
+  |
+  | Branch: REL-549
+  | PR: https://github.com/redblacktree/fastflow/pull/41
+  |
+  | Monitor command wired and documented. Dashboard functional.
+
+[run with --apply to execute]

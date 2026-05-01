@@ -1,0 +1,15 @@
+{
+  "id": "aaa00yyy-0000-0000-0000-000000000000",
+  "identifier": "REL-600",
+  "title": "A completed issue with a handoff comment",
+  "url": "https://linear.app/relevant-notion/issue/REL-600/completed-issue",
+  "state": { "id": "state-done-id", "name": "Done", "type": "completed" },
+  "children": [],
+  "comments": [
+    {
+      "id": "cmt-handoff-done",
+      "body": "Q HANDOFF / RETEST READY\n\nBranch: REL-600\nAll done.",
+      "createdAt": "2026-04-10T10:00:00.000Z"
+    }
+  ]
+}
