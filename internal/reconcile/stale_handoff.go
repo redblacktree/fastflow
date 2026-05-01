@@ -23,39 +23,39 @@ var (
 		"Duplicate": true,
 	}
 
-	prURLRegex   = regexp.MustCompile(`https?://(?:www\.)?github\.com/[^\s)]+/pull/\d+`)
-	branchRegex  = regexp.MustCompile(`(?mi)^\s*(?:[-*•]\s*)?branch\s*[:=]\s*(\S+)`)
+	prURLRegex  = regexp.MustCompile(`https?://(?:www\.)?github\.com/[^\s)]+/pull/\d+`)
+	branchRegex = regexp.MustCompile(`(?mi)^\s*(?:[-*•]\s*)?branch\s*[:=]\s*(\S+)`)
 )
 
 // StaleHandoffFacts is what Detect produces — all evidence used by Propose,
 // IdempotenceCheck, and Apply. Fully serializable for audit.
 type StaleHandoffFacts struct {
-	ParentID                string `json:"parent_id"`
-	ParentIdentifier        string `json:"parent_identifier"`
-	ParentTitle             string `json:"parent_title"`
-	ParentStateName         string `json:"parent_state_name"`
-	ParentStateID           string `json:"parent_state_id"`
-	HandoffCommentID        string `json:"handoff_comment_id"`
-	HandoffCommentBody      string `json:"handoff_comment_body"`
-	HasQAChild              bool   `json:"has_qa_child"`
-	HasReviewChild          bool   `json:"has_review_child"`
-	QAChildIdentifier       string `json:"qa_child_identifier,omitempty"`
-	ReviewChildIdentifier   string `json:"review_child_identifier,omitempty"`
-	HasRepairPointer        bool   `json:"has_repair_pointer"`
-	RepairPointerCommentID  string `json:"repair_pointer_comment_id,omitempty"`
-	DerivedPRURL            string `json:"derived_pr_url,omitempty"`
-	DerivedBranch           string `json:"derived_branch,omitempty"`
+	ParentID               string `json:"parent_id"`
+	ParentIdentifier       string `json:"parent_identifier"`
+	ParentTitle            string `json:"parent_title"`
+	ParentStateName        string `json:"parent_state_name"`
+	ParentStateID          string `json:"parent_state_id"`
+	HandoffCommentID       string `json:"handoff_comment_id"`
+	HandoffCommentBody     string `json:"handoff_comment_body"`
+	HasQAChild             bool   `json:"has_qa_child"`
+	HasReviewChild         bool   `json:"has_review_child"`
+	QAChildIdentifier      string `json:"qa_child_identifier,omitempty"`
+	ReviewChildIdentifier  string `json:"review_child_identifier,omitempty"`
+	HasRepairPointer       bool   `json:"has_repair_pointer"`
+	RepairPointerCommentID string `json:"repair_pointer_comment_id,omitempty"`
+	DerivedPRURL           string `json:"derived_pr_url,omitempty"`
+	DerivedBranch          string `json:"derived_branch,omitempty"`
 }
 
 // Detect inspects an already-fetched issue and returns the facts needed by
 // proposal/idempotence/apply. Pure function, no I/O.
 func Detect(issue *linear.Issue) *StaleHandoffFacts {
 	facts := &StaleHandoffFacts{
-		ParentID:        issue.ID,
+		ParentID:         issue.ID,
 		ParentIdentifier: issue.Identifier,
-		ParentTitle:     issue.Title,
-		ParentStateName: issue.State.Name,
-		ParentStateID:   issue.State.ID,
+		ParentTitle:      issue.Title,
+		ParentStateName:  issue.State.Name,
+		ParentStateID:    issue.State.ID,
 	}
 
 	// Scan comments: find the first handoff comment and any repair pointer.

@@ -11,10 +11,10 @@ import (
 // recordingMutator implements Mutator using fixture issues for reads and
 // records all mutation calls for inspection.
 type recordingMutator struct {
-	issue       *linear.Issue   // returned by GetIssueWithChildren
-	calls       []string        // method names in order
-	createCount int             // tracks CreateIssue invocation count
-	failOn      string          // if set, fail when this method is called (nth-specific: "CreateIssue2")
+	issue       *linear.Issue // returned by GetIssueWithChildren
+	calls       []string      // method names in order
+	createCount int           // tracks CreateIssue invocation count
+	failOn      string        // if set, fail when this method is called (nth-specific: "CreateIssue2")
 	failErr     error
 }
 
@@ -80,11 +80,11 @@ func TestApply_REL548_pre_executesAllSixSteps_inOrder(t *testing.T) {
 	}
 	want := []string{
 		"GetIssueWithChildren",
-		"CreateIssue",    // QA child
-		"CreateComment",  // boundary on QA
-		"CreateIssue",    // Review child
+		"CreateIssue",   // QA child
+		"CreateComment", // boundary on QA
+		"CreateIssue",   // Review child
 		"UpdateIssueState",
-		"CreateComment",  // repair pointer on parent
+		"CreateComment", // repair pointer on parent
 	}
 	if len(mut.calls) != len(want) {
 		t.Fatalf("calls = %v, want %v", mut.calls, want)

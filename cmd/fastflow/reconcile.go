@@ -17,12 +17,12 @@ import (
 )
 
 var (
-	flagReconcileIssue           string
-	flagReconcileApply           bool
-	flagReconcileLinearToken     string
-	flagReconcileTeamID          string
-	flagReconcileInReviewStateID string
-	flagReconcileQAAssigneeID    string
+	flagReconcileIssue            string
+	flagReconcileApply            bool
+	flagReconcileLinearToken      string
+	flagReconcileTeamID           string
+	flagReconcileInReviewStateID  string
+	flagReconcileQAAssigneeID     string
 	flagReconcileReviewAssigneeID string
 )
 
