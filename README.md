@@ -74,6 +74,52 @@ fastflow run --goal "Refactor auth system" --ticket ENG-1237 --no-review
 fastflow validate
 ```
 
+### Run an on-completion hook
+
+Use `--on-complete` to fire a shell command after a run finishes (success, failure, or signal-driven termination). Useful for Slack notifications, hand-off automation, or cleanup tasks for long-lived runs.
+
+```bash
+fastflow run --goal "Add feature X" --ticket ENG-1234 \
+  --on-complete 'curl -X POST -d "ticket=$FASTFLOW_TICKET status=$FASTFLOW_STATUS" https://hooks.slack.com/services/...'
+```
+
+The command is executed via `sh -c` and receives these environment variables:
+
+| Variable            | Value                                                        |
+|---------------------|--------------------------------------------------------------|
+| `FASTFLOW_TICKET`   | The ticket identifier passed via `--ticket`                  |
+| `FASTFLOW_STATUS`   | `complete` on success, `failed` on error or signal           |
+| `FASTFLOW_WORKTREE` | Absolute path to the run's working directory (worktree root) |
+| `FASTFLOW_RUN_DIR`  | Absolute path to the run artifact directory (`thoughts/...`) |
+| `FASTFLOW_ERROR`    | Error message when `STATUS=failed`, empty on success         |
+| `FASTFLOW_WORKFLOW` | Workflow name (e.g., `full`, `plan-first`)                   |
+| `FASTFLOW_PR_URL`   | Reserved (currently empty)                                   |
+
+Behavior:
+
+- The hook fires on every terminal outcome, including `SIGTERM`/`SIGINT` shutdown of long-lived `--background` runs.
+- The command is persisted in `state.json`, so it survives `--resume`.
+- The command has a 5-minute execution budget; if it exceeds that, it is killed with a warning and the run continues to exit normally.
+- Hook failures (non-zero exit, timeout) are logged as warnings and do **not** affect fastflow's own exit code.
+
+Examples:
+
+```bash
+# Append outcome to a log file
+fastflow run --ticket ENG-100 --goal "..." \
+  --on-complete 'echo "$(date) $FASTFLOW_TICKET=$FASTFLOW_STATUS" >> ~/fastflow.log'
+
+# Open the run directory in your editor on failure
+fastflow run --ticket ENG-101 --goal "..." \
+  --on-complete '[ "$FASTFLOW_STATUS" = "failed" ] && code "$FASTFLOW_RUN_DIR"'
+
+# Fire-and-forget Slack notification (background run)
+fastflow run --ticket ENG-102 --goal "..." --background \
+  --on-complete 'curl -fsSL -X POST -H "Content-Type: application/json" \
+    -d "{\"text\":\"$FASTFLOW_TICKET finished: $FASTFLOW_STATUS\"}" \
+    "$SLACK_WEBHOOK_URL"'
+```
+
 ### Monitor
 
 Start a web dashboard for monitoring in-flight fastflow runs:

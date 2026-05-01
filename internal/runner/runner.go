@@ -2,6 +2,7 @@ package runner
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -12,12 +13,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fatih/color"
 	"github.com/redblacktree/fastflow/internal/config"
 	"github.com/redblacktree/fastflow/internal/judge"
 	"github.com/redblacktree/fastflow/internal/output"
 	"github.com/redblacktree/fastflow/internal/state"
 	"github.com/redblacktree/fastflow/internal/worktree"
-	"github.com/fatih/color"
 )
 
 const (
@@ -25,15 +26,17 @@ const (
 	maxEvalRetries         = 2
 )
 
+var onCompleteTimeout = 5 * time.Minute
+
 // Runner orchestrates the execution of pipeline stages.
 type Runner struct {
-	Config         *config.Config
-	ConfigPath     string
-	NoReview       bool
-	DryRun         bool
-	Debug          bool
-	Verbose        bool
-	Resume         string // "auto", "true", "false", or "force"
+	Config     *config.Config
+	ConfigPath string
+	NoReview   bool
+	DryRun     bool
+	Debug      bool
+	Verbose    bool
+	Resume     string // "auto", "true", "false", or "force"
 	// MaxResumptions is the maximum number of handoff/resume cycles per stage (default: 3).
 	MaxResumptions int
 	// Interactive controls whether to prompt human for input (true) or auto-answer (false).
@@ -126,9 +129,7 @@ func (r *Runner) Run(ctx *RunContext) error {
 	defer signal.Stop(sigChan)
 	go func() {
 		sig := <-sigChan
-		errMsg := fmt.Sprintf("received signal: %s", sig)
-		pipelineState.SetFinalStatus(ctx.RunDir, state.StatusFailed, 1, errMsg) //nolint:errcheck
-		state.RemovePID(ctx.RunDir)
+		handleTerminationSignal(ctx, pipelineState, sig)
 		os.Exit(1)
 	}()
 
@@ -366,9 +367,7 @@ func (r *Runner) RunSingleStage(ctx *RunContext) error {
 	defer signal.Stop(sigChan)
 	go func() {
 		sig := <-sigChan
-		errMsg := fmt.Sprintf("received signal: %s", sig)
-		pipelineState.SetFinalStatus(ctx.RunDir, state.StatusFailed, 1, errMsg) //nolint:errcheck
-		state.RemovePID(ctx.RunDir)
+		handleTerminationSignal(ctx, pipelineState, sig)
 		os.Exit(1)
 	}()
 
@@ -1122,9 +1121,11 @@ Continue with the task based on the human's answer. Proceed with the implementat
 
 // executeOnComplete runs the on-complete shell command with environment variables
 // describing the run result. Errors are logged but do not affect the caller.
+// The command is killed after onCompleteTimeout to prevent hung hooks from
+// wedging a long-lived or background run.
 func executeOnComplete(ctx *RunContext, pState *state.PipelineState) {
-	cmd := pState.OnComplete
-	if cmd == "" {
+	cmdStr := pState.OnComplete
+	if cmdStr == "" {
 		return
 	}
 
@@ -1133,20 +1134,39 @@ func executeOnComplete(ctx *RunContext, pState *state.PipelineState) {
 		"FASTFLOW_TICKET="+pState.Ticket,
 		"FASTFLOW_STATUS="+pState.Status,
 		"FASTFLOW_WORKTREE="+ctx.WorkDir,
+		"FASTFLOW_RUN_DIR="+ctx.RunDir,
 		"FASTFLOW_ERROR="+pState.Error,
 		"FASTFLOW_PR_URL=",
 		"FASTFLOW_WORKFLOW="+pState.Workflow,
 	)
 
-	c := exec.Command("sh", "-c", cmd)
+	execCtx, cancel := context.WithTimeout(context.Background(), onCompleteTimeout)
+	defer cancel()
+
+	c := exec.CommandContext(execCtx, "sh", "-c", cmdStr)
 	c.Env = env
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 
-	if err := c.Run(); err != nil {
+	err := c.Run()
+	if err != nil {
 		warning := color.New(color.FgYellow).SprintFunc()
+		if execCtx.Err() == context.DeadlineExceeded {
+			output.Printf("    %s on-complete command timed out after %s\n",
+				warning("WARN"), onCompleteTimeout)
+			return
+		}
 		output.Printf("    %s on-complete command failed: %v\n", warning("WARN"), err)
 	}
+}
+
+// handleTerminationSignal writes final state, fires the on-complete hook, and
+// removes the PID file. Called from signal handler goroutines before os.Exit.
+func handleTerminationSignal(ctx *RunContext, pState *state.PipelineState, sig os.Signal) {
+	errMsg := fmt.Sprintf("received signal: %s", sig)
+	pState.SetFinalStatus(ctx.RunDir, state.StatusFailed, 1, errMsg) //nolint:errcheck
+	executeOnComplete(ctx, pState)
+	state.RemovePID(ctx.RunDir)
 }
 
 // truncateForContext truncates output to fit within context limits.

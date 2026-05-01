@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/redblacktree/fastflow/internal/state"
 )
@@ -15,6 +17,7 @@ func TestExecuteOnComplete_Success(t *testing.T) {
 
 	ctx := &RunContext{
 		WorkDir: "/tmp/test-worktree",
+		RunDir:  "/tmp/test-rundir",
 	}
 	pState := &state.PipelineState{
 		Ticket:     "TEST-001",
@@ -35,6 +38,7 @@ func TestExecuteOnComplete_Success(t *testing.T) {
 		"FASTFLOW_TICKET=":   "TEST-001",
 		"FASTFLOW_STATUS=":   "complete",
 		"FASTFLOW_WORKTREE=": "/tmp/test-worktree",
+		"FASTFLOW_RUN_DIR=":  "/tmp/test-rundir",
 		"FASTFLOW_WORKFLOW=": "full",
 	}
 	for prefix, want := range checks {
@@ -103,4 +107,57 @@ func TestExecuteOnComplete_CommandFailure(t *testing.T) {
 	}
 	// Should not panic or propagate the error
 	executeOnComplete(ctx, pState)
+}
+
+func TestExecuteOnComplete_Timeout(t *testing.T) {
+	orig := onCompleteTimeout
+	onCompleteTimeout = 100 * time.Millisecond
+	defer func() { onCompleteTimeout = orig }()
+
+	ctx := &RunContext{WorkDir: "/tmp"}
+	pState := &state.PipelineState{
+		Ticket:     "TEST-TIMEOUT",
+		Status:     state.StatusComplete,
+		OnComplete: "sleep 5",
+	}
+
+	start := time.Now()
+	executeOnComplete(ctx, pState)
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Errorf("executeOnComplete did not return within timeout window: %s", elapsed)
+	}
+}
+
+func TestHandleTerminationSignal_FiresOnComplete(t *testing.T) {
+	runDir := t.TempDir()
+	outFile := filepath.Join(runDir, "hook.out")
+
+	ctx := &RunContext{WorkDir: "/tmp/test-wt", RunDir: runDir}
+	pState := state.NewState("full", []string{"plan"}, "TEST-SIG", "/tmp/test-wt")
+	pState.OnComplete = "env | grep FASTFLOW > " + outFile
+	if err := pState.Save(runDir); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	handleTerminationSignal(ctx, pState, syscall.SIGTERM)
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("hook output not written: %v", err)
+	}
+	out := string(data)
+
+	if !strings.Contains(out, "FASTFLOW_STATUS=failed") {
+		t.Errorf("expected FASTFLOW_STATUS=failed, got: %s", out)
+	}
+	if !strings.Contains(out, "FASTFLOW_ERROR=received signal: terminated") {
+		t.Errorf("expected FASTFLOW_ERROR with signal name, got: %s", out)
+	}
+
+	loaded, _ := state.Load(runDir)
+	if loaded == nil || loaded.Status != state.StatusFailed {
+		t.Errorf("expected persisted status=failed, got: %+v", loaded)
+	}
 }
