@@ -80,7 +80,7 @@ fastflow re-execs itself as a detached process, writes all output to `fastflow.l
 
 ### Workspace trust
 
-By default fastflow accepts any working directory. In environments where runs must be confined to trusted paths (e.g. to prevent a stale workspace mirror from being targeted accidentally), use the blocked-prefix guardrail:
+By default `fastflow run` only starts from a git workspace that has an `origin` remote. This catches accidental runs from scratch directories or stale mirrors before fastflow creates state or worktrees. In environments where runs must also be confined away from specific paths (for example, to prevent a stale `.openclaw` workspace mirror from being targeted accidentally), add blocked-prefix guardrails:
 
 ```bash
 # Block a specific path prefix at invocation time
@@ -100,7 +100,7 @@ export FASTFLOW_BLOCKED_WORKSPACE_PREFIXES=/Users/me/.openclaw:/tmp
 fastflow run --goal "..." --ticket ENG-1
 ```
 
-If the resolved working directory falls under any blocked prefix, `fastflow run` exits immediately with a non-zero status. To bypass the check in a trusted one-off scenario, pass `--allow-untrusted-workspace` (or set `FASTFLOW_ALLOW_UNTRUSTED_WORKSPACE=1`).
+If the resolved working directory has no git `origin` remote or falls under any blocked prefix, `fastflow run` exits immediately with a non-zero status. To bypass the workspace-trust checks in a trusted one-off scenario, pass `--allow-untrusted-workspace` (or set `FASTFLOW_ALLOW_UNTRUSTED_WORKSPACE=1`).
 
 ### Validate configuration
 

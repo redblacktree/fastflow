@@ -193,22 +193,22 @@ Examples:
 
 // Flags
 var (
-	flagGoal        string
-	flagGoalFile    string
-	flagTicket      string
-	flagWorkflow    string
-	flagStage       string
-	flagNoReview    bool
-	flagConfigPath  string
-	flagDryRun      bool
-	flagDebug       bool
-	flagResume      string
-	flagInteractive bool
-	flagInitForce   bool
-	flagListPrefix  string
-	flagCleanPrefix string
-	flagCleanForce  bool
-	flagNoWorktree  bool
+	flagGoal                    string
+	flagGoalFile                string
+	flagTicket                  string
+	flagWorkflow                string
+	flagStage                   string
+	flagNoReview                bool
+	flagConfigPath              string
+	flagDryRun                  bool
+	flagDebug                   bool
+	flagResume                  string
+	flagInteractive             bool
+	flagInitForce               bool
+	flagListPrefix              string
+	flagCleanPrefix             string
+	flagCleanForce              bool
+	flagNoWorktree              bool
 	flagNoFetch                 bool
 	flagVerbose                 bool
 	flagLogFile                 string
