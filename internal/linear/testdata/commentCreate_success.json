@@ -1,0 +1,12 @@
+{
+  "data": {
+    "commentCreate": {
+      "success": true,
+      "comment": {
+        "id": "stub-comment-id-0001",
+        "body": "stub comment body",
+        "createdAt": "2026-05-01T00:00:00.000Z"
+      }
+    }
+  }
+}
