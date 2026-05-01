@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/fatih/color"
 	"github.com/redblacktree/fastflow/internal/config"
 	"github.com/redblacktree/fastflow/internal/monitor"
 	"github.com/redblacktree/fastflow/internal/output"
@@ -20,7 +21,6 @@ import (
 	"github.com/redblacktree/fastflow/internal/state"
 	"github.com/redblacktree/fastflow/internal/templates"
 	"github.com/redblacktree/fastflow/internal/worktree"
-	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
 
@@ -97,7 +97,11 @@ Examples:
   fastflow run --ticket ENG-1240 --stage plan
 
   # Force run even if another run is active (recovery)
-  fastflow run --ticket ENG-1241 --force`,
+  fastflow run --ticket ENG-1241 --force
+
+  # Fire a shell command on completion (success, failure, or signal)
+  fastflow run --ticket ENG-1242 --goal "..." \
+    --on-complete 'echo "$FASTFLOW_TICKET finished: $FASTFLOW_STATUS" | mailx -s fastflow ops@example.com'`,
 	RunE: runRun,
 }
 
@@ -204,14 +208,14 @@ var (
 	flagCleanPrefix string
 	flagCleanForce  bool
 	flagNoWorktree  bool
-	flagNoFetch      bool
-	flagVerbose      bool
-	flagLogFile      string
-	flagNoColor      bool
-	flagRunForce     bool
-	flagOnComplete   string
-	flagBackground   bool
-	flagMonitorAddr  string
+	flagNoFetch     bool
+	flagVerbose     bool
+	flagLogFile     string
+	flagNoColor     bool
+	flagRunForce    bool
+	flagOnComplete  string
+	flagBackground  bool
+	flagMonitorAddr string
 )
 
 func init() {
@@ -242,7 +246,10 @@ func init() {
 	runCmd.Flags().BoolVar(&flagNoFetch, "no-fetch", false, "Skip fetching main branch from origin before creating worktree")
 	runCmd.Flags().BoolVar(&flagVerbose, "verbose", false, "Show tool activity during stage execution")
 	runCmd.Flags().BoolVar(&flagRunForce, "force", false, "Bypass duplicate run detection (use for recovery)")
-	runCmd.Flags().StringVar(&flagOnComplete, "on-complete", "", "Shell command to run after completion (receives FASTFLOW_* env vars)")
+	runCmd.Flags().StringVar(&flagOnComplete, "on-complete", "",
+		"Shell command to run after the pipeline exits. Receives FASTFLOW_TICKET, "+
+			"FASTFLOW_STATUS, FASTFLOW_WORKTREE, FASTFLOW_RUN_DIR, FASTFLOW_ERROR, "+
+			"FASTFLOW_WORKFLOW. Times out after 5 minutes. See README for examples.")
 	runCmd.Flags().BoolVar(&flagBackground, "background", false, "Run in background (detach from terminal)")
 
 	// Only ticket is required - goal can come from multiple sources
