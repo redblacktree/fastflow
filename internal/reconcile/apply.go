@@ -55,13 +55,34 @@ func formatRepairPointer(r *RepairRecord) string {
 	return b.String()
 }
 
+func persistFailure(record *RepairRecord, completedStep string, err error) error {
+	nextStep := record.NextStep
+	if nextStep == "" {
+		nextStep = "inspect-completed-state"
+	}
+	return fmt.Errorf(
+		"apply: persist repair record after %s: %w (next_step=%s; recover by persisting the returned repair record and inspecting completed Linear mutations before any further --apply)",
+		completedStep,
+		err,
+		nextStep,
+	)
+}
+
+func persistRecord(persist func(*RepairRecord) error, record *RepairRecord, completedStep string) error {
+	if err := persist(record); err != nil {
+		return persistFailure(record, completedStep, err)
+	}
+	return nil
+}
+
 // Apply executes the legal repair in the order: re-check idempotence, create QA
 // child, post boundary on QA child, create Review child, move parent to In Review,
 // post repair pointer on parent.
 //
 // After each successful step persist(record) is called so partial failures leave
-// an auditable trail. On failure, the partial record is returned alongside the error.
-// Apply never rolls back completed steps.
+// an auditable trail. Persist failures are fatal and are surfaced explicitly with
+// the completed mutation state and recovery guidance. On failure, the partial
+// record is returned alongside the error. Apply never rolls back completed steps.
 func Apply(
 	m Mutator,
 	parentIdentifier string,
@@ -78,7 +99,9 @@ func Apply(
 	if err != nil {
 		record.LastError = err.Error()
 		record.NextStep = "re-fetch"
-		_ = persist(record)
+		if perr := persistRecord(persist, record, "recording re-fetch failure"); perr != nil {
+			return record, fmt.Errorf("apply: re-fetch %s: %v; additionally %w", parentIdentifier, err, perr)
+		}
 		return record, fmt.Errorf("apply: re-fetch %s: %w", parentIdentifier, err)
 	}
 	facts := Detect(iss)
@@ -99,25 +122,35 @@ func Apply(
 	if err != nil {
 		record.LastError = err.Error()
 		record.NextStep = "create-qa-child"
-		_ = persist(record)
+		if perr := persistRecord(persist, record, "recording create QA child failure"); perr != nil {
+			return record, fmt.Errorf("apply: create QA child: %v; additionally %w", err, perr)
+		}
 		return record, fmt.Errorf("apply: create QA child: %w", err)
 	}
 	record.QAChildID = qaIssue.ID
 	record.QAChildIdentifier = qaIssue.Identifier
 	record.NextStep = "post-qa-boundary"
-	_ = persist(record)
+	record.LastError = ""
+	if err := persistRecord(persist, record, "create QA child"); err != nil {
+		return record, err
+	}
 
 	// Step 3: Post boundary comment on QA child.
 	qaComment, err := m.CreateComment(qaIssue.ID, facts.HandoffCommentBody)
 	if err != nil {
 		record.LastError = err.Error()
 		record.NextStep = "post-qa-boundary"
-		_ = persist(record)
+		if perr := persistRecord(persist, record, "recording post QA boundary failure"); perr != nil {
+			return record, fmt.Errorf("apply: post QA boundary comment: %v; additionally %w", err, perr)
+		}
 		return record, fmt.Errorf("apply: post QA boundary comment: %w", err)
 	}
 	record.QABoundaryCommentID = qaComment.ID
 	record.NextStep = "create-review-child"
-	_ = persist(record)
+	record.LastError = ""
+	if err := persistRecord(persist, record, "post QA boundary comment"); err != nil {
+		return record, err
+	}
 
 	// Step 4: Create Review child.
 	reviewIssue, err := m.CreateIssue(linear.CreateIssueInput{
@@ -129,24 +162,34 @@ func Apply(
 	if err != nil {
 		record.LastError = err.Error()
 		record.NextStep = "create-review-child"
-		_ = persist(record)
+		if perr := persistRecord(persist, record, "recording create Review child failure"); perr != nil {
+			return record, fmt.Errorf("apply: create Review child: %v; additionally %w", err, perr)
+		}
 		return record, fmt.Errorf("apply: create Review child: %w", err)
 	}
 	record.ReviewChildID = reviewIssue.ID
 	record.ReviewChildIdentifier = reviewIssue.Identifier
 	record.NextStep = "move-parent-to-in-review"
-	_ = persist(record)
+	record.LastError = ""
+	if err := persistRecord(persist, record, "create Review child"); err != nil {
+		return record, err
+	}
 
 	// Step 5: Move parent to In Review.
 	if err := m.UpdateIssueState(facts.ParentID, cfg.InReviewStateID); err != nil {
 		record.LastError = err.Error()
 		record.NextStep = "move-parent-to-in-review"
-		_ = persist(record)
+		if perr := persistRecord(persist, record, "recording move parent to In Review failure"); perr != nil {
+			return record, fmt.Errorf("apply: move parent to In Review: %v; additionally %w", err, perr)
+		}
 		return record, fmt.Errorf("apply: move parent to In Review: %w", err)
 	}
 	record.ParentStateChanged = true
 	record.NextStep = "post-repair-pointer"
-	_ = persist(record)
+	record.LastError = ""
+	if err := persistRecord(persist, record, "move parent to In Review"); err != nil {
+		return record, err
+	}
 
 	// Step 6: Post repair pointer on parent.
 	pointerBody := formatRepairPointer(record)
@@ -154,14 +197,18 @@ func Apply(
 	if err != nil {
 		record.LastError = err.Error()
 		record.NextStep = "post-repair-pointer"
-		_ = persist(record)
+		if perr := persistRecord(persist, record, "recording post repair pointer failure"); perr != nil {
+			return record, fmt.Errorf("apply: post repair pointer: %v; additionally %w", err, perr)
+		}
 		return record, fmt.Errorf("apply: post repair pointer: %w", err)
 	}
 	record.RepairPointerID = pointer.ID
 	record.CompletedAt = time.Now().UTC().Format(time.RFC3339)
 	record.NextStep = ""
 	record.LastError = ""
-	_ = persist(record)
+	if err := persistRecord(persist, record, "post repair pointer"); err != nil {
+		return record, err
+	}
 
 	return record, nil
 }

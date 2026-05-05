@@ -101,6 +101,139 @@ func TestGetIssueWithChildren_PopulatesChildren(t *testing.T) {
 	}
 }
 
+func TestGetIssueWithChildren_PaginatesChildrenAndComments(t *testing.T) {
+	c, stub := newStubClient([]stubRule{
+		{
+			contains: "GetIssueWithChildren",
+			status:   200,
+			body: `{
+  "data": {
+    "issue": {
+      "id": "aaa00548-0000-0000-0000-000000000000",
+      "identifier": "REL-548",
+      "title": "Add --on-complete hook support for pipeline runs",
+      "url": "https://linear.app/relevant-notion/issue/REL-548/add-on-complete-hook-support",
+      "state": {
+        "id": "state-in-progress-id",
+        "name": "In Progress",
+        "type": "started"
+      },
+      "parent": null,
+      "children": {
+        "pageInfo": {
+          "hasNextPage": true,
+          "endCursor": "child-cursor-1"
+        },
+        "nodes": [
+          {
+            "id": "aaa00558-0000-0000-0000-000000000000",
+            "identifier": "REL-558",
+            "title": "QA: Add --on-complete hook support for pipeline runs",
+            "state": {
+              "id": "state-in-progress-id",
+              "name": "In Progress",
+              "type": "started"
+            }
+          }
+        ]
+      },
+      "comments": {
+        "pageInfo": {
+          "hasNextPage": true,
+          "endCursor": "comment-cursor-1"
+        },
+        "nodes": [
+          {
+            "id": "556160da",
+            "body": "Q HANDOFF / RETEST READY",
+            "createdAt": "2026-04-28T14:00:00.000Z",
+            "user": {
+              "id": "user-q-id",
+              "name": "Q",
+              "displayName": "Q"
+            }
+          }
+        ]
+      }
+    }
+  }
+}`,
+		},
+		{
+			contains: "GetIssueChildrenPage",
+			status:   200,
+			body: `{
+  "data": {
+    "issue": {
+      "children": {
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": ""
+        },
+        "nodes": [
+          {
+            "id": "aaa00559-0000-0000-0000-000000000000",
+            "identifier": "REL-559",
+            "title": "Review: Add --on-complete hook support for pipeline runs",
+            "state": {
+              "id": "state-in-progress-id",
+              "name": "In Progress",
+              "type": "started"
+            }
+          }
+        ]
+      }
+    }
+  }
+}`,
+		},
+		{
+			contains: "GetIssueCommentsPage",
+			status:   200,
+			body: `{
+  "data": {
+    "issue": {
+      "comments": {
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": ""
+        },
+        "nodes": [
+          {
+            "id": "repair-ptr-548",
+            "body": "[fastflow-reconcile] stale-handoff repair applied",
+            "createdAt": "2026-04-29T09:00:00.000Z",
+            "user": null
+          }
+        ]
+      }
+    }
+  }
+}`,
+		},
+	})
+
+	iss, err := c.GetIssueWithChildren("REL-548")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(iss.Children) != 2 {
+		t.Fatalf("len(Children) = %d, want 2", len(iss.Children))
+	}
+	if iss.Children[1].Identifier != "REL-559" {
+		t.Errorf("Children[1].Identifier = %q, want REL-559", iss.Children[1].Identifier)
+	}
+	if len(iss.Comments) != 2 {
+		t.Fatalf("len(Comments) = %d, want 2", len(iss.Comments))
+	}
+	if iss.Comments[1].ID != "repair-ptr-548" {
+		t.Errorf("Comments[1].ID = %q, want repair-ptr-548", iss.Comments[1].ID)
+	}
+	if len(stub.Requests) != 3 {
+		t.Fatalf("len(Requests) = %d, want 3", len(stub.Requests))
+	}
+}
+
 func TestGetIssueWithChildren_ErrorsOnHTTPFailure(t *testing.T) {
 	c, _ := newStubClient([]stubRule{
 		{contains: "REL-548", status: 500, body: `internal server error`},

@@ -179,6 +179,45 @@ func TestRunReconcileStaleHandoff_apply_REL548_pre_writesRecordFile(t *testing.T
 	}
 }
 
+func TestRunReconcileStaleHandoff_applyPersistFailureAfterMutationReturnsError(t *testing.T) {
+	buf, cleanup := captureOutput(t)
+	defer cleanup()
+
+	runDir := t.TempDir()
+	if err := os.Chmod(runDir, 0500); err != nil {
+		t.Fatalf("chmod runDir: %v", err)
+	}
+	defer func() {
+		_ = os.Chmod(runDir, 0700)
+	}()
+
+	client := &fakeClient{issue: makeREL548Pre()}
+	err := runReconcileStaleHandoffWith("REL-548", true, testReconcileCfg, client, runDir)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "persist repair record after create QA child") {
+		t.Fatalf("error %q does not mention create QA child persist failure", err.Error())
+	}
+	if client.createCount != 1 {
+		t.Fatalf("expected 1 CreateIssue before persist failure, got %d", client.createCount)
+	}
+	if len(client.comments) != 0 {
+		t.Fatalf("expected no comments after early persist failure, got %d", len(client.comments))
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "Apply failed:") {
+		t.Fatalf("output %q does not include apply failure", got)
+	}
+	if !strings.Contains(got, "Audit record unavailable:") {
+		t.Fatalf("output %q does not report missing audit record", got)
+	}
+	if strings.Contains(got, "Repair applied successfully") {
+		t.Fatalf("output %q should not report success", got)
+	}
+}
+
 func TestRunReconcileStaleHandoff_applyMissingConfigRefusesBeforeMutation(t *testing.T) {
 	_, cleanup := captureOutput(t)
 	defer cleanup()

@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -171,6 +172,62 @@ func TestApply_failsAtStep4_writesPartialRecord_with_NextStep(t *testing.T) {
 	last := persisted[len(persisted)-1]
 	if last.NextStep != "create-review-child" {
 		t.Errorf("NextStep = %q, want create-review-child", last.NextStep)
+	}
+}
+
+func TestApply_persistFailureAfterCreateQAChild_returnsMutationState(t *testing.T) {
+	persist := func(r *RepairRecord) error {
+		if r.QAChildID != "" {
+			return errors.New("disk full")
+		}
+		return nil
+	}
+
+	mut := &recordingMutator{issue: loadIssueFixture(t, "issue_REL-548_pre.json")}
+	record, err := Apply(mut, "REL-548", testCfg, persist)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "persist repair record after create QA child") {
+		t.Fatalf("error %q does not mention create QA child persist failure", err.Error())
+	}
+	if !strings.Contains(err.Error(), "next_step=post-qa-boundary") {
+		t.Fatalf("error %q does not mention next_step=post-qa-boundary", err.Error())
+	}
+	if record.QAChildID == "" {
+		t.Fatal("QAChildID should be set after successful QA creation")
+	}
+	if len(mut.calls) != 2 {
+		t.Fatalf("calls = %v, want [GetIssueWithChildren CreateIssue]", mut.calls)
+	}
+}
+
+func TestApply_persistFailureAfterPostRepairPointer_returnsErrorNotSuccess(t *testing.T) {
+	persistCalls := 0
+	persist := func(_ *RepairRecord) error {
+		persistCalls++
+		if persistCalls == 5 {
+			return fmt.Errorf("write audit record")
+		}
+		return nil
+	}
+
+	mut := &recordingMutator{issue: loadIssueFixture(t, "issue_REL-548_pre.json")}
+	record, err := Apply(mut, "REL-548", testCfg, persist)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "persist repair record after post repair pointer") {
+		t.Fatalf("error %q does not mention post repair pointer persist failure", err.Error())
+	}
+	if record.RepairPointerID == "" {
+		t.Fatal("RepairPointerID should be set after successful pointer creation")
+	}
+	if record.CompletedAt == "" {
+		t.Fatal("CompletedAt should be set before final persist")
+	}
+	if len(mut.calls) != 6 {
+		t.Fatalf("calls = %v, want 6 operations through final mutation", mut.calls)
 	}
 }
 

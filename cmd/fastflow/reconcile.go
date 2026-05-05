@@ -157,7 +157,11 @@ func runReconcileStaleHandoffWith(
 	if err != nil {
 		output.Printf("%s Apply failed: %v\n", errColor("ERROR"), err)
 		if recordPath != "" {
-			output.Printf("    Partial record: %s\n", recordPath)
+			if _, statErr := os.Stat(recordPath); statErr == nil {
+				output.Printf("    Partial record: %s\n", recordPath)
+			} else {
+				output.Printf("    Audit record unavailable: %s\n", recordPath)
+			}
 		}
 		return err
 	}

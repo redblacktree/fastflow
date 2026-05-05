@@ -80,8 +80,34 @@ query GetIssueWithChildren($id: String!) {
     id identifier title url
     state { id name type }
     parent { id identifier }
-    children(first: 50) { nodes { id identifier title state { id name type } } }
-    comments(first: 100) { nodes { id body createdAt user { id name displayName } } }
+    children(first: 50) {
+      pageInfo { hasNextPage endCursor }
+      nodes { id identifier title state { id name type } }
+    }
+    comments(first: 100) {
+      pageInfo { hasNextPage endCursor }
+      nodes { id body createdAt user { id name displayName } }
+    }
+  }
+}`
+
+const getIssueChildrenPageQuery = `
+query GetIssueChildrenPage($id: String!, $after: String!) {
+  issue(id: $id) {
+    children(first: 50, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { id identifier title state { id name type } }
+    }
+  }
+}`
+
+const getIssueCommentsPageQuery = `
+query GetIssueCommentsPage($id: String!, $after: String!) {
+  issue(id: $id) {
+    comments(first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { id body createdAt user { id name displayName } }
+    }
   }
 }`
 
@@ -170,12 +196,23 @@ type gqlIssue struct {
 		ID         string `json:"id"`
 		Identifier string `json:"identifier"`
 	} `json:"parent"`
-	Children struct {
-		Nodes []gqlIssue `json:"nodes"`
-	} `json:"children"`
-	Comments struct {
-		Nodes []Comment `json:"nodes"`
-	} `json:"comments"`
+	Children gqlIssueConnection   `json:"children"`
+	Comments gqlCommentConnection `json:"comments"`
+}
+
+type gqlPageInfo struct {
+	HasNextPage bool   `json:"hasNextPage"`
+	EndCursor   string `json:"endCursor"`
+}
+
+type gqlIssueConnection struct {
+	Nodes    []gqlIssue  `json:"nodes"`
+	PageInfo gqlPageInfo `json:"pageInfo"`
+}
+
+type gqlCommentConnection struct {
+	Nodes    []Comment   `json:"nodes"`
+	PageInfo gqlPageInfo `json:"pageInfo"`
 }
 
 func (g gqlIssue) toIssue() *Issue {
@@ -199,6 +236,60 @@ func (g gqlIssue) toIssue() *Issue {
 	return iss
 }
 
+func (c *Client) paginateChildren(identifier string, issue *gqlIssue) error {
+	for issue.Children.PageInfo.HasNextPage {
+		if issue.Children.PageInfo.EndCursor == "" {
+			return fmt.Errorf("linear: children pagination for issue %q reported hasNextPage without endCursor", identifier)
+		}
+
+		var resp struct {
+			Data struct {
+				Issue struct {
+					Children gqlIssueConnection `json:"children"`
+				} `json:"issue"`
+			} `json:"data"`
+		}
+		if err := c.doGraphQL(getIssueChildrenPageQuery, map[string]interface{}{
+			"id":    identifier,
+			"after": issue.Children.PageInfo.EndCursor,
+		}, &resp); err != nil {
+			return fmt.Errorf("linear: paginate children for issue %q: %w", identifier, err)
+		}
+
+		issue.Children.Nodes = append(issue.Children.Nodes, resp.Data.Issue.Children.Nodes...)
+		issue.Children.PageInfo = resp.Data.Issue.Children.PageInfo
+	}
+
+	return nil
+}
+
+func (c *Client) paginateComments(identifier string, issue *gqlIssue) error {
+	for issue.Comments.PageInfo.HasNextPage {
+		if issue.Comments.PageInfo.EndCursor == "" {
+			return fmt.Errorf("linear: comments pagination for issue %q reported hasNextPage without endCursor", identifier)
+		}
+
+		var resp struct {
+			Data struct {
+				Issue struct {
+					Comments gqlCommentConnection `json:"comments"`
+				} `json:"issue"`
+			} `json:"data"`
+		}
+		if err := c.doGraphQL(getIssueCommentsPageQuery, map[string]interface{}{
+			"id":    identifier,
+			"after": issue.Comments.PageInfo.EndCursor,
+		}, &resp); err != nil {
+			return fmt.Errorf("linear: paginate comments for issue %q: %w", identifier, err)
+		}
+
+		issue.Comments.Nodes = append(issue.Comments.Nodes, resp.Data.Issue.Comments.Nodes...)
+		issue.Comments.PageInfo = resp.Data.Issue.Comments.PageInfo
+	}
+
+	return nil
+}
+
 // GetIssueWithChildren fetches an issue with its children and comments.
 // identifier may be either a Linear UUID or a human identifier like "REL-548".
 func (c *Client) GetIssueWithChildren(identifier string) (*Issue, error) {
@@ -212,6 +303,12 @@ func (c *Client) GetIssueWithChildren(identifier string) (*Issue, error) {
 	}
 	if resp.Data.Issue.ID == "" {
 		return nil, fmt.Errorf("linear: issue %q not found", identifier)
+	}
+	if err := c.paginateChildren(identifier, &resp.Data.Issue); err != nil {
+		return nil, err
+	}
+	if err := c.paginateComments(identifier, &resp.Data.Issue); err != nil {
+		return nil, err
 	}
 	return resp.Data.Issue.toIssue(), nil
 }
