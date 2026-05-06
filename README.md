@@ -190,6 +190,35 @@ fastflow uses `orchestrator.json` for workflow configuration. See the included c
 - Setting up checkpoints for human review
 - Custom judge prompts for stage validation
 
+### fastflow reconcile stale-handoff
+
+Detects parent Linear issues that have a `Q HANDOFF / RETEST READY` comment but are missing their QA and Review child lanes. In dry-run mode (default) it prints a fact-backed proposal listing exactly what would be created. With `--apply` it executes the repair exactly once: creates a `QA: <title>` child (assigned to the QA owner), creates a `Review: <title>` child (assigned to the reviewer), moves the parent to `In Review`, copies the canonical handoff boundary onto the QA child, and posts a repair pointer on the parent. Re-running on a post-repair parent is a no-op.
+
+**Required environment variables**
+
+| Variable | Flag override | Description |
+|---|---|---|
+| `LINEAR_API_KEY` | `--linear-token` | Linear personal API token |
+| `LINEAR_TEAM_ID` | `--team` | Linear team ID |
+| `LINEAR_IN_REVIEW_STATE_ID` | `--in-review-state` | Workflow state UUID for "In Review" |
+| `LINEAR_QA_ASSIGNEE_ID` | `--qa-assignee` | Linear user UUID for the QA child |
+| `LINEAR_REVIEW_ASSIGNEE_ID` | `--review-assignee` | Linear user UUID for the Review child |
+
+**Examples**
+
+```bash
+# Dry-run — inspect the proposal without making any changes
+LINEAR_API_KEY=... fastflow reconcile stale-handoff --issue REL-548
+
+# Apply the repair
+LINEAR_API_KEY=... \
+  LINEAR_TEAM_ID=... \
+  LINEAR_IN_REVIEW_STATE_ID=... \
+  LINEAR_QA_ASSIGNEE_ID=... \
+  LINEAR_REVIEW_ASSIGNEE_ID=... \
+  fastflow reconcile stale-handoff --issue REL-548 --apply
+```
+
 ## Acknowledgements
 
 The workflow prompts and orchestration patterns in this project were inspired by [HumanLayer](https://github.com/humanlayer/humanlayer).

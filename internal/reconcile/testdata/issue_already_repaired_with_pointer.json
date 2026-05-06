@@ -1,0 +1,37 @@
+{
+  "id": "aaa00bbb-0000-0000-0000-000000000000",
+  "identifier": "REL-605",
+  "title": "Issue already repaired",
+  "url": "https://linear.app/relevant-notion/issue/REL-605/already-repaired",
+  "state": { "id": "state-in-review-id", "name": "In Review", "type": "started" },
+  "children": [
+    {
+      "id": "aaa00qa5-0000-0000-0000-000000000000",
+      "identifier": "REL-606",
+      "title": "QA: Issue already repaired",
+      "state": { "id": "state-in-progress-id", "name": "In Progress", "type": "started" },
+      "children": [],
+      "comments": []
+    },
+    {
+      "id": "aaa00rv5-0000-0000-0000-000000000000",
+      "identifier": "REL-607",
+      "title": "Review: Issue already repaired",
+      "state": { "id": "state-in-progress-id", "name": "In Progress", "type": "started" },
+      "children": [],
+      "comments": []
+    }
+  ],
+  "comments": [
+    {
+      "id": "cmt-handoff-605",
+      "body": "Q HANDOFF / RETEST READY\n\nBranch: REL-605\nReady.",
+      "createdAt": "2026-04-20T10:00:00.000Z"
+    },
+    {
+      "id": "repair-ptr-605",
+      "body": "[fastflow-reconcile] stale-handoff repair applied\n- QA child: REL-606\n- Review child: REL-607\n- Source comment id: cmt-handoff-605\n- Tool: fastflow reconcile stale-handoff (REL-546)",
+      "createdAt": "2026-04-21T09:00:00.000Z"
+    }
+  ]
+}

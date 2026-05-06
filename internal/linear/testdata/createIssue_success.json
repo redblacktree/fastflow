@@ -1,0 +1,12 @@
+{
+  "data": {
+    "issueCreate": {
+      "success": true,
+      "issue": {
+        "id": "stub-qa-uuid-0000-0000-0000-000000000001",
+        "identifier": "STUB-101",
+        "title": "QA: Stub issue title"
+      }
+    }
+  }
+}

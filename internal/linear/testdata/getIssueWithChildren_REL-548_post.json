@@ -1,0 +1,66 @@
+{
+  "data": {
+    "issue": {
+      "id": "aaa00548-0000-0000-0000-000000000000",
+      "identifier": "REL-548",
+      "title": "Add --on-complete hook support for pipeline runs",
+      "url": "https://linear.app/relevant-notion/issue/REL-548/add-on-complete-hook-support",
+      "state": {
+        "id": "state-in-review-id",
+        "name": "In Review",
+        "type": "started"
+      },
+      "parent": null,
+      "children": {
+        "nodes": [
+          {
+            "id": "aaa00558-0000-0000-0000-000000000000",
+            "identifier": "REL-558",
+            "title": "QA: Add --on-complete hook support for pipeline runs",
+            "state": {
+              "id": "state-in-progress-id",
+              "name": "In Progress",
+              "type": "started"
+            },
+            "parent": null,
+            "children": { "nodes": [] },
+            "comments": { "nodes": [] }
+          },
+          {
+            "id": "aaa00559-0000-0000-0000-000000000000",
+            "identifier": "REL-559",
+            "title": "Review: Add --on-complete hook support for pipeline runs",
+            "state": {
+              "id": "state-in-progress-id",
+              "name": "In Progress",
+              "type": "started"
+            },
+            "parent": null,
+            "children": { "nodes": [] },
+            "comments": { "nodes": [] }
+          }
+        ]
+      },
+      "comments": {
+        "nodes": [
+          {
+            "id": "556160da",
+            "body": "Q HANDOFF / RETEST READY\n\nBranch: REL-548\nPR: https://github.com/redblacktree/fastflow/pull/36\n\nImplementation complete. --on-complete flag added and tested.",
+            "createdAt": "2026-04-28T14:00:00.000Z",
+            "user": {
+              "id": "user-q-id",
+              "name": "Q",
+              "displayName": "Q"
+            }
+          },
+          {
+            "id": "repair-ptr-548",
+            "body": "[fastflow-reconcile] stale-handoff repair applied\n- QA child: REL-558\n- Review child: REL-559\n- Source comment id: 556160da\n- Tool: fastflow reconcile stale-handoff (REL-546)",
+            "createdAt": "2026-04-29T09:00:00.000Z",
+            "user": null
+          }
+        ]
+      }
+    }
+  }
+}

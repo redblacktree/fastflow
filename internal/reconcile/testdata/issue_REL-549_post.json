@@ -1,0 +1,37 @@
+{
+  "id": "aaa00549-0000-0000-0000-000000000000",
+  "identifier": "REL-549",
+  "title": "Implement fastflow monitor web dashboard",
+  "url": "https://linear.app/relevant-notion/issue/REL-549/implement-fastflow-monitor-web-dashboard",
+  "state": { "id": "state-in-review-id", "name": "In Review", "type": "started" },
+  "children": [
+    {
+      "id": "aaa00560-0000-0000-0000-000000000000",
+      "identifier": "REL-560",
+      "title": "QA: Implement fastflow monitor web dashboard",
+      "state": { "id": "state-in-progress-id", "name": "In Progress", "type": "started" },
+      "children": [],
+      "comments": []
+    },
+    {
+      "id": "aaa00561-0000-0000-0000-000000000000",
+      "identifier": "REL-561",
+      "title": "Review: Implement fastflow monitor web dashboard",
+      "state": { "id": "state-in-progress-id", "name": "In Progress", "type": "started" },
+      "children": [],
+      "comments": []
+    }
+  ],
+  "comments": [
+    {
+      "id": "e0a0b191",
+      "body": "Q HANDOFF / RETEST READY\n\nBranch: REL-549\nPR: https://github.com/redblacktree/fastflow/pull/41\n\nMonitor command wired and documented. Dashboard functional.",
+      "createdAt": "2026-04-29T10:00:00.000Z"
+    },
+    {
+      "id": "repair-ptr-549",
+      "body": "[fastflow-reconcile] stale-handoff repair applied\n- QA child: REL-560\n- Review child: REL-561\n- Source comment id: e0a0b191\n- Tool: fastflow reconcile stale-handoff (REL-546)",
+      "createdAt": "2026-04-30T09:00:00.000Z"
+    }
+  ]
+}
