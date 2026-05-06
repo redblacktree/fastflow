@@ -861,7 +861,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		output.Printf("\n%s Fastflow initialized!\n", success("SUCCESS"))
 		output.Printf("\n%s Next steps:\n", info(">>>"))
 		output.Printf("    1. Review orchestrator.json and customize workflows\n")
-		output.Printf("    2. (Optional) Set \"backend\": \"codex\" to use OpenAI Codex CLI instead of Claude Code\n")
+		output.Printf("    2. (Optional) See docs/backends.md for Codex/Copilot setup; prefer per-stage overrides or codex-quick for Codex\n")
 		output.Printf("    3. Run 'fastflow validate' to verify configuration\n")
 		output.Printf("    4. Run 'fastflow run --goal \"...\" --ticket TICKET-123'\n")
 	}

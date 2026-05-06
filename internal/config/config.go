@@ -18,15 +18,15 @@ type Defaults struct {
 
 // Config is the top-level orchestrator configuration.
 type Config struct {
-	Workflows          map[string]Workflow          `json:"workflows"`
-	Stages             map[string]Stage             `json:"stages"`
-	DefaultWorkflow    string                       `json:"default_workflow"`
-	DefaultJudgePrompt string                       `json:"default_judge_prompt"`
-	JudgeModel         string                       `json:"judge_model"`
-	JudgeBackend       string                       `json:"judge_backend,omitempty"` // empty = Backend
-	Backend            string                       `json:"backend,omitempty"`       // empty = "claude"
-	Backends           map[string]backend.Config    `json:"backends,omitempty"`      // per-backend settings
-	Defaults           Defaults                     `json:"defaults,omitempty"`
+	Workflows          map[string]Workflow       `json:"workflows"`
+	Stages             map[string]Stage          `json:"stages"`
+	DefaultWorkflow    string                    `json:"default_workflow"`
+	DefaultJudgePrompt string                    `json:"default_judge_prompt"`
+	JudgeModel         string                    `json:"judge_model"`
+	JudgeBackend       string                    `json:"judge_backend,omitempty"` // empty = Backend
+	Backend            string                    `json:"backend,omitempty"`       // empty = "claude"
+	Backends           map[string]backend.Config `json:"backends,omitempty"`      // per-backend settings
+	Defaults           Defaults                  `json:"defaults,omitempty"`
 }
 
 // Workflow defines a named workflow as a sequence of stages.

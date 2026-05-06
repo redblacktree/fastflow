@@ -27,8 +27,8 @@ type InvokeOptions struct {
 
 // InvokeResult is the shared shape returned by every backend.
 type InvokeResult struct {
-	Output       string  // primary text result for downstream consumers (judge, prompt builders)
-	RawOutput    string  // full output incl. stderr & non-structured lines, for auth/error sniffing
+	Output       string // primary text result for downstream consumers (judge, prompt builders)
+	RawOutput    string // full output incl. stderr & non-structured lines, for auth/error sniffing
 	ExitCode     int
 	HitMaxTurns  bool
 	HitBudgetCap bool

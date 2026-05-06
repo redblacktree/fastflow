@@ -12,7 +12,7 @@ import (
 // Result represents the outcome of a judge evaluation.
 type Result struct {
 	Success     bool
-	Interactive bool   // True if stage is waiting for user input
+	Interactive bool // True if stage is waiting for user input
 	Reasoning   string
 }
 
