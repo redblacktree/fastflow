@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/redblacktree/fastflow/internal/backend"
 )
 
 // ValidationError represents a configuration validation error.
@@ -16,9 +18,10 @@ func (e ValidationError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Field, e.Message)
 }
 
-// ValidationResult contains all validation errors found.
+// ValidationResult contains all validation errors and warnings found.
 type ValidationResult struct {
-	Errors []ValidationError
+	Errors   []ValidationError
+	Warnings []ValidationError
 }
 
 // IsValid returns true if no validation errors were found.
@@ -40,12 +43,15 @@ func (r *ValidationResult) Error() string {
 	return sb.String()
 }
 
+// resolveBackendName returns the name treating empty as the default "claude".
+func resolveBackendName(name string) string {
+	if name == "" {
+		return "claude"
+	}
+	return name
+}
+
 // Validate checks the configuration for errors.
-// It validates that:
-// - A default workflow exists
-// - All workflows reference valid stages
-// - All stages have either a prompt_file or skill defined
-// - All required dependencies (files) exist
 func Validate(cfg *Config) *ValidationResult {
 	result := &ValidationResult{}
 
@@ -59,12 +65,40 @@ func Validate(cfg *Config) *ValidationResult {
 		}
 	}
 
-	// Check judge model is valid
-	validModels := map[string]bool{"opus": true, "sonnet": true, "haiku": true}
-	if cfg.JudgeModel != "" && !validModels[cfg.JudgeModel] {
+	// Check that the global backend is registered.
+	globalBackend := resolveBackendName(cfg.Backend)
+	if _, err := backend.New(globalBackend, cfg.BackendConfig(globalBackend)); err != nil {
 		result.Errors = append(result.Errors, ValidationError{
-			Field:   "judge_model",
-			Message: fmt.Sprintf("invalid model %q (must be opus, sonnet, or haiku)", cfg.JudgeModel),
+			Field:   "backend",
+			Message: err.Error(),
+		})
+	}
+
+	// Check that the judge backend is registered.
+	judgeBackend := resolveBackendName(cfg.JudgeBackend)
+	if _, err := backend.New(judgeBackend, cfg.BackendConfig(judgeBackend)); err != nil {
+		result.Errors = append(result.Errors, ValidationError{
+			Field:   "judge_backend",
+			Message: err.Error(),
+		})
+	}
+
+	// Warn when a stage's effective backend is non-Claude but the stage still
+	// references Claude slash-command paths (.claude/). Those stages will fail at
+	// runtime because Codex (and other non-Claude backends) cannot execute
+	// slash-command skills. Users should either keep those stages on Claude or
+	// author backend-specific prompt files that do not rely on /slash-commands.
+	for stageName, stage := range cfg.Stages {
+		effectiveBackend := resolveBackendName(cfg.BackendForStage(&stage))
+		if effectiveBackend == "claude" || !stageUsesClaudePaths(stage) {
+			continue
+		}
+		result.Warnings = append(result.Warnings, ValidationError{
+			Field: fmt.Sprintf("stages.%s", stageName),
+			Message: fmt.Sprintf(
+				"stage uses .claude/ paths but will run under backend %q, which cannot execute Claude slash-command skills; the stage will fail at runtime",
+				effectiveBackend,
+			),
 		})
 	}
 
@@ -98,13 +132,19 @@ func Validate(cfg *Config) *ValidationResult {
 			})
 		}
 
-		// Check model is valid
-		if stage.Model != "" && !validModels[stage.Model] {
-			result.Errors = append(result.Errors, ValidationError{
-				Field:   fmt.Sprintf("stages.%s.model", name),
-				Message: fmt.Sprintf("invalid model %q (must be opus, sonnet, or haiku)", stage.Model),
-			})
+		// Per-stage backend override must also be registered.
+		if stage.Backend != "" {
+			if _, err := backend.New(stage.Backend, cfg.BackendConfig(stage.Backend)); err != nil {
+				result.Errors = append(result.Errors, ValidationError{
+					Field:   fmt.Sprintf("stages.%s.backend", name),
+					Message: err.Error(),
+				})
+			}
 		}
+
+		// Note: model-name validation is intentionally NOT enforced here.
+		// Model names are delegated to the backend at invocation time so that
+		// new model releases don't require fastflow config changes.
 
 		// Check maxBudgetUsd is non-negative if set
 		if stage.MaxBudgetUsd != nil && *stage.MaxBudgetUsd < 0 {
@@ -124,6 +164,18 @@ func Validate(cfg *Config) *ValidationResult {
 	}
 
 	return result
+}
+
+func stageUsesClaudePaths(stage Stage) bool {
+	if strings.Contains(stage.PromptFile, ".claude/") {
+		return true
+	}
+	for _, req := range stage.Requires {
+		if strings.Contains(req, ".claude/") {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateDependencies checks that all required files exist.

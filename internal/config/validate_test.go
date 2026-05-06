@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"testing"
+
+	_ "github.com/redblacktree/fastflow/internal/backend/claude"
+)
 
 func TestValidate_NegativeStageBudget(t *testing.T) {
 	neg := -1.0

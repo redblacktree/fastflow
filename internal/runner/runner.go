@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	bk "github.com/redblacktree/fastflow/internal/backend"
+	_ "github.com/redblacktree/fastflow/internal/backend/claude" // register claude backend
 	"github.com/redblacktree/fastflow/internal/config"
 	"github.com/redblacktree/fastflow/internal/judge"
 	"github.com/redblacktree/fastflow/internal/output"
@@ -63,6 +65,20 @@ func NewRunner(cfg *config.Config, configPath string) *Runner {
 		ConfigPath:     configPath,
 		MaxResumptions: 3,
 	}
+}
+
+// backendForStage resolves the right backend for a stage, falling back to the global config backend.
+func (r *Runner) backendForStage(stage *config.Stage) (bk.Backend, error) {
+	name := stage.Backend
+	if name == "" {
+		name = r.Config.Backend
+	}
+	return bk.New(name, r.Config.BackendConfig(name))
+}
+
+// judgeBackend returns the backend to use for judge evaluation.
+func (r *Runner) judgeBackend() (bk.Backend, error) {
+	return bk.New(r.Config.JudgeBackend, r.Config.BackendConfig(r.Config.JudgeBackend))
 }
 
 // Run executes the pipeline for the given context.
@@ -210,7 +226,6 @@ func (r *Runner) Run(ctx *RunContext) error {
 
 			var answer string
 			if r.Interactive {
-				// Human-in-the-loop mode: Prompt human for input
 				output.Printf("    %s Interactive prompt detected, waiting for human input...\n",
 					warning("INTERACTIVE"))
 				answer, err = r.promptHumanForAnswer(judgeResult.Reasoning)
@@ -221,7 +236,6 @@ func (r *Runner) Run(ctx *RunContext) error {
 				}
 				result, err = r.continueWithAnswer(ctx, stageName, stage, result, judgeResult.Reasoning, answer)
 			} else {
-				// Auto-answer mode: Claude answers its own question
 				output.Printf("    %s Interactive prompt detected, auto-answering (%d/%d)...\n",
 					warning("INTERACTIVE"), interactionAttempts, maxInteractionAttempts)
 				result, err = r.selfAnswer(ctx, stageName, stage, result, judgeResult.Reasoning)
@@ -314,8 +328,6 @@ func (r *Runner) Run(ctx *RunContext) error {
 }
 
 // RunSingleStage executes a single named stage without workflow state tracking.
-// The stage runs exactly once — no judge retry loop, no resume state.
-// Checkpoint behavior still applies if the stage has checkpoint: true.
 func (r *Runner) RunSingleStage(ctx *RunContext) error {
 	stageName := ctx.Stage
 	stage, err := r.Config.GetStage(stageName)
@@ -525,16 +537,27 @@ func (r *Runner) clearRunDirectory(runDir string) error {
 	return nil
 }
 
-// executeStage runs a single stage.
+// executeStage runs a single stage using the configured backend.
 func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.Stage) (*InvokeResult, error) {
-	invoker := NewClaudeInvoker(ctx.WorkDir)
-	invoker.Debug = r.Debug
-	invoker.Verbose = r.Verbose
-	invoker.MaxBudgetUsd = r.Config.EffectiveBudget(stage)
+	b, err := r.backendForStage(stage)
+	if err != nil {
+		return nil, fmt.Errorf("backend init: %w", err)
+	}
 
 	model := stage.Model
 	if model == "" {
-		model = "sonnet"
+		model = b.DefaultModel()
+	}
+
+	caps := b.Capabilities()
+
+	// Warn if budget is configured but backend doesn't support it
+	budgetUsd := r.Config.EffectiveBudget(stage)
+	if budgetUsd > 0 && !caps.SupportsBudget {
+		warning := color.New(color.FgYellow).SprintFunc()
+		output.Printf("    %s Backend %q does not support maxBudgetUsd; ignoring budget cap\n",
+			warning("WARN"), b.Name())
+		budgetUsd = 0
 	}
 
 	// Build the prompt
@@ -543,13 +566,22 @@ func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.S
 		return nil, err
 	}
 
-	// Execute based on whether it's a skill or prompt file
-	var result *InvokeResult
-	if stage.Skill != "" {
-		result, err = invoker.InvokeWithSkill(stage.Skill, model, prompt)
-	} else {
-		result, err = invoker.Invoke(prompt, model)
+	// Build invoke options
+	opts := bk.InvokeOptions{
+		Model:        model,
+		WorkDir:      ctx.WorkDir,
+		MaxBudgetUsd: budgetUsd,
+		Verbose:      r.Verbose,
+		Debug:        r.Debug,
 	}
+	if stage.Skill != "" {
+		opts.Skill = stage.Skill
+		opts.SkillContext = prompt
+	} else {
+		opts.Prompt = prompt
+	}
+
+	result, err := b.Invoke(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -562,17 +594,14 @@ func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.S
 		output.Printf("    %s Max turns reached, attempting handoff/resume (%d/%d)...\n",
 			warning("RESUME"), resumptions, r.MaxResumptions)
 
-		// Run create_handoff to save state
-		handoffResult, handoffErr := r.runHandoffCycle(ctx, stageName, model, invoker)
+		handoffResult, handoffErr := r.runHandoffCycle(ctx, stageName, model, b)
 		if handoffErr != nil {
 			if r.Debug {
 				output.Printf("[DEBUG] Handoff/resume failed: %v\n", handoffErr)
 			}
-			// Continue with partial result rather than failing completely
 			break
 		}
 
-		// Combine outputs
 		result.Output += "\n\n--- [RESUMED AFTER MAX TURNS] ---\n\n" + handoffResult.Output
 		result.HitMaxTurns = handoffResult.HitMaxTurns
 		result.ExitCode = handoffResult.ExitCode
@@ -592,7 +621,7 @@ func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.S
 		output.Printf("    %s Budget exhausted ($%.2f), attempting handoff/resume (%d/%d)...\n",
 			warning("BUDGET"), result.TotalCostUsd, budgetResumptions, r.MaxResumptions)
 
-		handoffResult, handoffErr := r.runBudgetHandoffCycle(ctx, stageName, stage, model, invoker)
+		handoffResult, handoffErr := r.runBudgetHandoffCycle(ctx, stageName, stage, model, b)
 		if handoffErr != nil {
 			if r.Debug {
 				output.Printf("[DEBUG] Budget handoff/resume failed: %v\n", handoffErr)
@@ -600,7 +629,6 @@ func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.S
 			break
 		}
 
-		// Combine outputs
 		result.Output += "\n\n--- [RESUMED AFTER BUDGET EXHAUSTION] ---\n\n" + handoffResult.Output
 		result.HitBudgetCap = handoffResult.HitBudgetCap
 		result.HitMaxTurns = handoffResult.HitMaxTurns
@@ -624,8 +652,15 @@ func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.S
 }
 
 // runHandoffCycle runs create_handoff followed by resume_handoff.
-func (r *Runner) runHandoffCycle(ctx *RunContext, stageName string, model string, invoker *ClaudeInvoker) (*InvokeResult, error) {
-	// Step 1: Create handoff document
+// If the backend doesn't support slash-commands, it skips the cycle with a warning.
+func (r *Runner) runHandoffCycle(ctx *RunContext, stageName string, model string, b bk.Backend) (*InvokeResult, error) {
+	if !b.Capabilities().SupportsSlashCommands {
+		warning := color.New(color.FgYellow).SprintFunc()
+		output.Printf("    %s Backend %q does not support slash-command handoff; returning partial result\n",
+			warning("WARN"), b.Name())
+		return &InvokeResult{}, nil
+	}
+
 	handoffContext := fmt.Sprintf("Stage: %s\nTicket: %s\nGoal: %s\nRun directory: %s",
 		stageName, ctx.Ticket, ctx.Goal, ctx.RunDir)
 
@@ -633,17 +668,28 @@ func (r *Runner) runHandoffCycle(ctx *RunContext, stageName string, model string
 		output.Printf("[DEBUG] Running create_handoff skill...\n")
 	}
 
-	_, createErr := invoker.InvokeWithSkill("create_handoff", model, handoffContext)
+	_, createErr := b.Invoke(bk.InvokeOptions{
+		Skill:        "create_handoff",
+		SkillContext: handoffContext,
+		Model:        model,
+		WorkDir:      ctx.WorkDir,
+		Debug:        r.Debug,
+	})
 	if createErr != nil {
 		return nil, fmt.Errorf("create_handoff failed: %w", createErr)
 	}
 
-	// Step 2: Resume from handoff
 	if r.Debug {
 		output.Printf("[DEBUG] Running resume_handoff skill...\n")
 	}
 
-	resumeResult, resumeErr := invoker.InvokeWithSkill("resume_handoff", model, handoffContext)
+	resumeResult, resumeErr := b.Invoke(bk.InvokeOptions{
+		Skill:        "resume_handoff",
+		SkillContext: handoffContext,
+		Model:        model,
+		WorkDir:      ctx.WorkDir,
+		Debug:        r.Debug,
+	})
 	if resumeErr != nil {
 		return nil, fmt.Errorf("resume_handoff failed: %w", resumeErr)
 	}
@@ -654,10 +700,13 @@ func (r *Runner) runHandoffCycle(ctx *RunContext, stageName string, model string
 // runBudgetHandoffCycle handles context handoff when budget is exhausted.
 // Step 1: --continue on the same session to write .fastflow/handoff.md
 // Step 2: Fresh session reads the handoff and continues the original task
-func (r *Runner) runBudgetHandoffCycle(ctx *RunContext, stageName string, stage *config.Stage, model string, invoker *ClaudeInvoker) (*InvokeResult, error) {
+func (r *Runner) runBudgetHandoffCycle(ctx *RunContext, stageName string, stage *config.Stage, model string, b bk.Backend) (*InvokeResult, error) {
+	if !b.Capabilities().SupportsResume {
+		return nil, fmt.Errorf("backend %q does not support session resume for budget handoff", b.Name())
+	}
+
 	handoffPath := filepath.Join(ctx.WorkDir, ".fastflow", "handoff.md")
 
-	// Step 1: Continue the exhausted session to write a handoff document
 	if r.Debug {
 		output.Printf("[DEBUG] Running --continue to write handoff document...\n")
 	}
@@ -677,7 +726,13 @@ Write the handoff document now. This is your only task.`, handoffPath)
 		return nil, fmt.Errorf("failed to create .fastflow directory: %w", err)
 	}
 
-	_, createErr := invoker.InvokeContinue(handoffPrompt, model)
+	_, createErr := b.Invoke(bk.InvokeOptions{
+		Continue: true,
+		Prompt:   handoffPrompt,
+		Model:    model,
+		WorkDir:  ctx.WorkDir,
+		Debug:    r.Debug,
+	})
 	if createErr != nil {
 		return nil, fmt.Errorf("handoff continue failed: %w", createErr)
 	}
@@ -687,7 +742,6 @@ Write the handoff document now. This is your only task.`, handoffPath)
 		return nil, fmt.Errorf("handoff document was not created at %s", handoffPath)
 	}
 
-	// Step 2: Fresh session reads handoff and continues the original task
 	if r.Debug {
 		output.Printf("[DEBUG] Starting fresh session from handoff...\n")
 	}
@@ -707,18 +761,24 @@ Write the handoff document now. This is your only task.`, handoffPath)
 
 Continue the work described in the handoff document. Pick up where the previous session left off.`, handoffPath, originalPrompt)
 
-	// Create a fresh invoker for the new session (same settings)
-	freshInvoker := NewClaudeInvoker(ctx.WorkDir)
-	freshInvoker.Debug = r.Debug
-	freshInvoker.Verbose = r.Verbose
-	freshInvoker.MaxBudgetUsd = invoker.MaxBudgetUsd
+	budgetUsd := r.Config.EffectiveBudget(stage)
 
 	var resumeResult *InvokeResult
-	if stage.Skill != "" {
-		resumeResult, err = freshInvoker.InvokeWithSkill(stage.Skill, model, resumePrompt)
-	} else {
-		resumeResult, err = freshInvoker.Invoke(resumePrompt, model)
+	resumeOpts := bk.InvokeOptions{
+		Model:        model,
+		WorkDir:      ctx.WorkDir,
+		MaxBudgetUsd: budgetUsd,
+		Verbose:      r.Verbose,
+		Debug:        r.Debug,
 	}
+	if stage.Skill != "" {
+		resumeOpts.Skill = stage.Skill
+		resumeOpts.SkillContext = resumePrompt
+	} else {
+		resumeOpts.Prompt = resumePrompt
+	}
+
+	resumeResult, err = b.Invoke(resumeOpts)
 	if err != nil {
 		return nil, fmt.Errorf("handoff resume failed: %w", err)
 	}
@@ -731,7 +791,6 @@ func (r *Runner) buildStagePrompt(ctx *RunContext, stageName string, stage *conf
 	var basePrompt string
 
 	if stage.PromptFile != "" {
-		// Read the prompt file
 		promptPath := config.ResolvePromptFile(r.ConfigPath, stage.PromptFile)
 		content, err := os.ReadFile(promptPath)
 		if err != nil {
@@ -770,7 +829,11 @@ func (r *Runner) injectPlaceholders(prompt string, ctx *RunContext) string {
 
 // evaluateStage runs the judge evaluation for a completed stage.
 func (r *Runner) evaluateStage(ctx *RunContext, stageName string, stage *config.Stage, result *InvokeResult) (*judge.Result, error) {
-	j := judge.NewJudge(r.Config.JudgeModel)
+	jb, err := r.judgeBackend()
+	if err != nil {
+		return nil, fmt.Errorf("judge backend init: %w", err)
+	}
+	j := judge.NewJudge(jb, r.Config.JudgeModel)
 	j.Debug = r.Debug
 
 	judgePrompt := stage.JudgePrompt
@@ -809,8 +872,6 @@ func (r *Runner) handleCheckpoint(ctx *RunContext, stageName string) error {
 }
 
 // writeGoalFile creates or updates the goal.md file in the run directory.
-// If goal.md already exists with a non-empty goal that matches ctx.Goal,
-// the file is preserved to retain any user-edited content.
 func (r *Runner) writeGoalFile(ctx *RunContext) error {
 	goalPath := filepath.Join(ctx.RunDir, "goal.md")
 
@@ -844,7 +905,6 @@ Run Directory: %s
 }
 
 // ReadExistingGoal reads the goal from an existing goal.md in the given directory.
-// Returns an empty string if the file doesn't exist or has no goal.
 func ReadExistingGoal(runDir string) string {
 	goalPath := filepath.Join(runDir, "goal.md")
 	content, err := os.ReadFile(goalPath)
@@ -855,7 +915,6 @@ func ReadExistingGoal(runDir string) string {
 }
 
 // parseGoalField extracts the goal: value from goal.md frontmatter content.
-// Returns empty string if content has no frontmatter or no non-empty goal field.
 func parseGoalField(content string) string {
 	if !strings.HasPrefix(content, "---") {
 		return ""
@@ -886,16 +945,12 @@ func parseGoalField(content string) string {
 
 // SetupWorktreeOpts configures worktree creation behavior.
 type SetupWorktreeOpts struct {
-	// NoFetch disables fetching the main branch from origin before branching.
-	NoFetch bool
-	// AfterCreate hooks run after a new worktree is created. Each receives the worktree path.
+	NoFetch     bool
 	AfterCreate []func(wtPath string) error
-	// BaseDir overrides the default worktree base directory (for testing).
-	BaseDir string
+	BaseDir     string
 }
 
 // SetupWorktree creates a worktree for the run if needed.
-// Returns the worktree path and whether it already existed.
 func SetupWorktree(ticket string, opts SetupWorktreeOpts) (string, bool, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -962,15 +1017,16 @@ func GetRunDir(workDir, ticket string) string {
 	return filepath.Join(workDir, "thoughts", "shared", "runs", ticket)
 }
 
-// selfAnswer re-invokes Claude with context to answer its own question.
+// selfAnswer re-invokes the backend with context to answer its own question.
 func (r *Runner) selfAnswer(ctx *RunContext, stageName string, stage *config.Stage, previousResult *InvokeResult, question string) (*InvokeResult, error) {
-	invoker := NewClaudeInvoker(ctx.WorkDir)
-	invoker.Debug = r.Debug
-	invoker.Verbose = r.Verbose
+	b, err := r.backendForStage(stage)
+	if err != nil {
+		return nil, fmt.Errorf("backend init: %w", err)
+	}
 
 	model := stage.Model
 	if model == "" {
-		model = "sonnet"
+		model = b.DefaultModel()
 	}
 
 	prompt := fmt.Sprintf(`You previously asked a question or presented options while working on a task.
@@ -994,18 +1050,25 @@ Based on the original goal and context above, answer your own question and conti
 Do NOT ask for further clarification. Make a decision and proceed with the implementation.
 `, ctx.Goal, ctx.Ticket, question, truncateForContext(previousResult.Output, 5000))
 
-	return invoker.Invoke(prompt, model)
+	return b.Invoke(bk.InvokeOptions{
+		Prompt:  prompt,
+		Model:   model,
+		WorkDir: ctx.WorkDir,
+		Verbose: r.Verbose,
+		Debug:   r.Debug,
+	})
 }
 
 // retryWithFeedback re-invokes a stage with evaluation feedback so it can fix its output.
 func (r *Runner) retryWithFeedback(ctx *RunContext, stageName string, stage *config.Stage, previousResult *InvokeResult, evalFeedback string) (*InvokeResult, error) {
-	invoker := NewClaudeInvoker(ctx.WorkDir)
-	invoker.Debug = r.Debug
-	invoker.Verbose = r.Verbose
+	b, err := r.backendForStage(stage)
+	if err != nil {
+		return nil, fmt.Errorf("backend init: %w", err)
+	}
 
 	model := stage.Model
 	if model == "" {
-		model = "sonnet"
+		model = b.DefaultModel()
 	}
 
 	judgePrompt := stage.JudgePrompt
@@ -1032,10 +1095,20 @@ func (r *Runner) retryWithFeedback(ctx *RunContext, stageName string, stage *con
 Fix the issues identified in the evaluation feedback above. Make sure your output fully satisfies all the evaluation criteria. Do NOT ask for clarification — just fix the issues and complete the stage.
 `, stageName, ctx.Goal, ctx.Ticket, judgePrompt, evalFeedback, truncateForContext(previousResult.Output, 5000))
 
-	if stage.Skill != "" {
-		return invoker.InvokeWithSkill(stage.Skill, model, prompt)
+	opts := bk.InvokeOptions{
+		Model:   model,
+		WorkDir: ctx.WorkDir,
+		Verbose: r.Verbose,
+		Debug:   r.Debug,
 	}
-	return invoker.Invoke(prompt, model)
+	if stage.Skill != "" {
+		opts.Skill = stage.Skill
+		opts.SkillContext = prompt
+	} else {
+		opts.Prompt = prompt
+	}
+
+	return b.Invoke(opts)
 }
 
 // promptHumanForAnswer displays the question and reads human input from stdin.
@@ -1086,15 +1159,16 @@ func (r *Runner) promptHumanForAnswer(question string) (string, error) {
 	return answer, nil
 }
 
-// continueWithAnswer re-invokes Claude with the human's answer to continue the task.
+// continueWithAnswer re-invokes the backend with the human's answer to continue the task.
 func (r *Runner) continueWithAnswer(ctx *RunContext, stageName string, stage *config.Stage, previousResult *InvokeResult, question string, answer string) (*InvokeResult, error) {
-	invoker := NewClaudeInvoker(ctx.WorkDir)
-	invoker.Debug = r.Debug
-	invoker.Verbose = r.Verbose
+	b, err := r.backendForStage(stage)
+	if err != nil {
+		return nil, fmt.Errorf("backend init: %w", err)
+	}
 
 	model := stage.Model
 	if model == "" {
-		model = "sonnet"
+		model = b.DefaultModel()
 	}
 
 	prompt := fmt.Sprintf(`You previously asked a question while working on a task. The human has provided their answer.
@@ -1116,7 +1190,13 @@ func (r *Runner) continueWithAnswer(ctx *RunContext, stageName string, stage *co
 Continue with the task based on the human's answer. Proceed with the implementation.
 `, ctx.Goal, ctx.Ticket, question, answer, truncateForContext(previousResult.Output, 5000))
 
-	return invoker.Invoke(prompt, model)
+	return b.Invoke(bk.InvokeOptions{
+		Prompt:  prompt,
+		Model:   model,
+		WorkDir: ctx.WorkDir,
+		Verbose: r.Verbose,
+		Debug:   r.Debug,
+	})
 }
 
 // executeOnComplete runs the on-complete shell command with environment variables

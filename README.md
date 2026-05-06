@@ -4,7 +4,7 @@ A multi-agent development workflow orchestrator that automates the full developm
 
 ## Overview
 
-fastflow orchestrates development workflows by running specialized stages in isolated Claude Code contexts:
+fastflow orchestrates development workflows by running specialized stages in isolated coding-agent contexts:
 
 ```
 Goal → Worktree → Research → Plan → Implement → Validate → Commit/PR
@@ -12,22 +12,42 @@ Goal → Worktree → Research → Plan → Implement → Validate → Commit/PR
 
 Each stage communicates via markdown files in `thoughts/`, enabling clean handoffs between agent contexts.
 
+The default backend is **Claude Code**. You can also run stages using **OpenAI Codex CLI** by
+setting `"backend": "codex"` on individual stages (or using the built-in `codex-quick` workflow).
+The default Claude workflows use Claude slash-command skills that Codex cannot execute, so Codex
+works per-stage rather than as a global drop-in. See [docs/backends.md](docs/backends.md) for the
+full capability matrix, setup instructions, and how to add new backends.
+
 ## Prerequisites
 
-- [Claude Code](https://claude.ai/claude-code) CLI installed and authenticated
+- A coding agent CLI installed and authenticated. Supported backends:
+  - **Claude Code** (default): <https://claude.ai/claude-code>
+  - **Codex CLI**: <https://github.com/openai/codex>
 
 ## Authentication
 
-Claude Code must be authenticated before fastflow can run. For headless or automated environments (Linux VMs, CI, containers) where a browser-based login isn't feasible, use `setup-token` to create a long-lived authentication token:
+### Claude Code (default)
+
+Claude Code must be authenticated before fastflow can run. For headless or automated environments
+(Linux VMs, CI, containers) where a browser-based login isn't feasible, use `setup-token` to create
+a long-lived authentication token:
 
 ```bash
 claude setup-token
 ```
 
-This avoids the interactive OAuth flow that requires a browser. Without a valid session, fastflow will fail immediately with:
+This avoids the interactive OAuth flow that requires a browser. Without a valid session, fastflow
+will fail immediately with:
 
 ```
 claude is not logged in: please run 'claude' interactively and use /login to authenticate
+```
+
+### Codex CLI
+
+```bash
+codex login
+# or set OPENAI_API_KEY in your environment
 ```
 
 ## Installation
@@ -186,9 +206,11 @@ Each entry includes: `ticket`, `status`, `stage`, `created`, `updated_at`, `pid`
 fastflow uses `orchestrator.json` for workflow configuration. See the included config for examples of:
 
 - Defining workflows and their stages
-- Configuring stage models (sonnet, opus, haiku)
+- Configuring stage models and backends
 - Setting up checkpoints for human review
 - Custom judge prompts for stage validation
+
+See [docs/backends.md](docs/backends.md) for backend setup, the capability matrix, and fallback behavior.
 
 ### fastflow reconcile stale-handoff
 

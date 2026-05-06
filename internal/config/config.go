@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/redblacktree/fastflow/internal/backend"
 )
 
 // Defaults holds global default settings that can be overridden per-stage.
@@ -16,12 +18,15 @@ type Defaults struct {
 
 // Config is the top-level orchestrator configuration.
 type Config struct {
-	Workflows          map[string]Workflow `json:"workflows"`
-	Stages             map[string]Stage    `json:"stages"`
-	DefaultWorkflow    string              `json:"default_workflow"`
-	DefaultJudgePrompt string              `json:"default_judge_prompt"`
-	JudgeModel         string              `json:"judge_model"`
-	Defaults           Defaults            `json:"defaults,omitempty"`
+	Workflows          map[string]Workflow       `json:"workflows"`
+	Stages             map[string]Stage          `json:"stages"`
+	DefaultWorkflow    string                    `json:"default_workflow"`
+	DefaultJudgePrompt string                    `json:"default_judge_prompt"`
+	JudgeModel         string                    `json:"judge_model"`
+	JudgeBackend       string                    `json:"judge_backend,omitempty"` // empty = Backend
+	Backend            string                    `json:"backend,omitempty"`       // empty = "claude"
+	Backends           map[string]backend.Config `json:"backends,omitempty"`      // per-backend settings
+	Defaults           Defaults                  `json:"defaults,omitempty"`
 }
 
 // Workflow defines a named workflow as a sequence of stages.
@@ -38,6 +43,7 @@ type Stage struct {
 	Skill        string   `json:"skill,omitempty"`
 	Requires     []string `json:"requires,omitempty"`
 	Model        string   `json:"model,omitempty"`
+	Backend      string   `json:"backend,omitempty"` // per-stage override; empty = Config.Backend
 	Checkpoint   bool     `json:"checkpoint,omitempty"`
 	JudgePrompt  string   `json:"judge_prompt,omitempty"`
 	MaxBudgetUsd *float64 `json:"maxBudgetUsd,omitempty"`
@@ -50,6 +56,22 @@ func (c *Config) EffectiveBudget(stage *Stage) float64 {
 		return *stage.MaxBudgetUsd
 	}
 	return c.Defaults.MaxBudgetUsd
+}
+
+// BackendConfig returns the per-backend config block, or zero value if absent.
+func (c *Config) BackendConfig(name string) backend.Config {
+	if c.Backends == nil {
+		return backend.Config{}
+	}
+	return c.Backends[name]
+}
+
+// BackendForStage returns the backend name for a stage, falling back to the global backend.
+func (c *Config) BackendForStage(stage *Stage) string {
+	if stage.Backend != "" {
+		return stage.Backend
+	}
+	return c.Backend
 }
 
 // Load reads and parses a config file from the given path.
@@ -78,6 +100,12 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.DefaultJudgePrompt == "" {
 		cfg.DefaultJudgePrompt = "Did this stage complete successfully? Look for clear evidence that the required work was done. Respond with YES or NO followed by a brief explanation."
+	}
+	if cfg.Backend == "" {
+		cfg.Backend = "claude"
+	}
+	if cfg.JudgeBackend == "" {
+		cfg.JudgeBackend = cfg.Backend
 	}
 
 	return &cfg, nil

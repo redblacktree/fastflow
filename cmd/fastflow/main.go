@@ -14,6 +14,9 @@ import (
 	"syscall"
 
 	"github.com/fatih/color"
+	bk "github.com/redblacktree/fastflow/internal/backend"
+	_ "github.com/redblacktree/fastflow/internal/backend/claude" // register claude backend
+	_ "github.com/redblacktree/fastflow/internal/backend/codex"  // register codex backend
 	"github.com/redblacktree/fastflow/internal/config"
 	"github.com/redblacktree/fastflow/internal/monitor"
 	"github.com/redblacktree/fastflow/internal/output"
@@ -54,8 +57,9 @@ var rootCmd = &cobra.Command{
 	Long: `fastflow automates the full development workflow:
 Goal → Worktree → Research → Plan → Implement → Validate → Commit/PR
 
-Each stage runs in a fresh Claude Code context, communicating via
-markdown files in thoughts/.`,
+Each stage runs in a fresh agent context (Claude Code by default;
+configurable via the "backend" field in orchestrator.json), communicating
+via markdown files in thoughts/.`,
 }
 
 var runCmd = &cobra.Command{
@@ -712,6 +716,9 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("configuration validation failed")
 	}
 	output.Printf("%s Configuration structure valid\n", success("OK"))
+	for _, w := range result.Warnings {
+		output.Printf("%s %s: %s\n", warning("WARN"), w.Field, w.Message)
+	}
 
 	// Show workflows
 	output.Printf("\n%s Workflows:\n", bold("Configured"))
@@ -755,12 +762,38 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	}
 	output.Printf("%s All dependencies found\n", success("OK"))
 
-	// Check for claude CLI
+	// Check the configured backend binaries
 	output.Printf("\n%s Checking runtime dependencies...\n", bold(""))
-	if _, err := findExecutable("which", "claude"); err != nil {
-		output.Printf("%s Claude CLI not found in PATH\n", warning("WARN"))
-	} else {
-		output.Printf("%s Claude CLI found\n", success("OK"))
+	seenBackends := map[string]bool{
+		cfg.Backend:      true,
+		cfg.JudgeBackend: true,
+	}
+	for _, stage := range cfg.Stages {
+		if stage.Backend != "" {
+			seenBackends[stage.Backend] = true
+		}
+	}
+	for name := range seenBackends {
+		if name == "" {
+			continue
+		}
+		b, err := bk.New(name, cfg.BackendConfig(name))
+		if err != nil {
+			output.Printf("%s Backend %q: %v\n", errColor("ERROR"), name, err)
+			continue
+		}
+		// Determine binary: use override from backends config if set, else the backend name
+		binary := name
+		if cfg.Backends != nil {
+			if c, ok := cfg.Backends[name]; ok && c.Binary != "" {
+				binary = c.Binary
+			}
+		}
+		if _, lookErr := exec.LookPath(binary); lookErr != nil {
+			output.Printf("%s %s CLI (%q) not found in PATH\n", warning("WARN"), b.Name(), binary)
+		} else {
+			output.Printf("%s %s CLI (%q) found\n", success("OK"), b.Name(), binary)
+		}
 	}
 
 	output.Printf("\n%s Configuration is valid!\n", success("SUCCESS"))
@@ -828,8 +861,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 		output.Printf("\n%s Fastflow initialized!\n", success("SUCCESS"))
 		output.Printf("\n%s Next steps:\n", info(">>>"))
 		output.Printf("    1. Review orchestrator.json and customize workflows\n")
-		output.Printf("    2. Run 'fastflow validate' to verify configuration\n")
-		output.Printf("    3. Run 'fastflow run --goal \"...\" --ticket TICKET-123'\n")
+		output.Printf("    2. (Optional) See docs/backends.md for Codex/Copilot setup; prefer per-stage overrides or codex-quick for Codex\n")
+		output.Printf("    3. Run 'fastflow validate' to verify configuration\n")
+		output.Printf("    4. Run 'fastflow run --goal \"...\" --ticket TICKET-123'\n")
 	}
 
 	return nil
