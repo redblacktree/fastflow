@@ -83,39 +83,23 @@ func Validate(cfg *Config) *ValidationResult {
 		})
 	}
 
-	// Warn when a non-Claude global backend is paired with stages that use
-	// Claude slash-command paths (.claude/). Those stages will fail at runtime
-	// because Codex (and other non-Claude backends) cannot execute slash-command
-	// skills. Users should either set backend per-stage or author backend-specific
-	// prompt files that do not rely on /slash-commands.
-	if globalBackend != "claude" {
-		for stageName, stage := range cfg.Stages {
-			effectiveBackend := stage.Backend
-			if effectiveBackend == "" {
-				effectiveBackend = globalBackend
-			}
-			if effectiveBackend == "claude" {
-				continue
-			}
-			usesClaudePaths := strings.Contains(stage.PromptFile, ".claude/")
-			if !usesClaudePaths {
-				for _, req := range stage.Requires {
-					if strings.Contains(req, ".claude/") {
-						usesClaudePaths = true
-						break
-					}
-				}
-			}
-			if usesClaudePaths {
-				result.Warnings = append(result.Warnings, ValidationError{
-					Field: fmt.Sprintf("stages.%s", stageName),
-					Message: fmt.Sprintf(
-						"stage uses .claude/ paths but will run under backend %q, which cannot execute Claude slash-command skills; the stage will fail at runtime",
-						effectiveBackend,
-					),
-				})
-			}
+	// Warn when a stage's effective backend is non-Claude but the stage still
+	// references Claude slash-command paths (.claude/). Those stages will fail at
+	// runtime because Codex (and other non-Claude backends) cannot execute
+	// slash-command skills. Users should either keep those stages on Claude or
+	// author backend-specific prompt files that do not rely on /slash-commands.
+	for stageName, stage := range cfg.Stages {
+		effectiveBackend := resolveBackendName(cfg.BackendForStage(&stage))
+		if effectiveBackend == "claude" || !stageUsesClaudePaths(stage) {
+			continue
 		}
+		result.Warnings = append(result.Warnings, ValidationError{
+			Field: fmt.Sprintf("stages.%s", stageName),
+			Message: fmt.Sprintf(
+				"stage uses .claude/ paths but will run under backend %q, which cannot execute Claude slash-command skills; the stage will fail at runtime",
+				effectiveBackend,
+			),
+		})
 	}
 
 	// Check workflows
@@ -180,6 +164,18 @@ func Validate(cfg *Config) *ValidationResult {
 	}
 
 	return result
+}
+
+func stageUsesClaudePaths(stage Stage) bool {
+	if strings.Contains(stage.PromptFile, ".claude/") {
+		return true
+	}
+	for _, req := range stage.Requires {
+		if strings.Contains(req, ".claude/") {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateDependencies checks that all required files exist.

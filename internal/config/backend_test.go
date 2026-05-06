@@ -141,25 +141,45 @@ func TestValidate_WarnsCodexGlobalWithClaudePaths(t *testing.T) {
 	}
 }
 
-func TestValidate_NoWarnCodexPerStageOverride(t *testing.T) {
-	// When a stage has an explicit backend="codex" override but the global
-	// backend is "claude", no warning should fire (the stage opts in explicitly).
+func TestValidate_WarnsCodexPerStageOverrideWithClaudePrompt(t *testing.T) {
 	cfg := &config.Config{
 		Backend:         "claude",
 		JudgeBackend:    "claude",
 		DefaultWorkflow: "full",
-		Workflows:       map[string]config.Workflow{"full": {Stages: []string{"s1", "s2"}}},
+		Workflows:       map[string]config.Workflow{"full": {Stages: []string{"s1"}}},
 		Stages: map[string]config.Stage{
-			"s1": {PromptFile: ".claude/stages/implement.md"},
-			"s2": {PromptFile: ".codex/stages/implement.md", Backend: "codex"},
+			"s1": {PromptFile: ".claude/stages/implement.md", Backend: "codex"},
 		},
 	}
 	res := config.Validate(cfg)
 	if !res.IsValid() {
 		t.Errorf("expected no errors, got: %s", res.Error())
 	}
-	if len(res.Warnings) != 0 {
-		t.Errorf("expected no warnings, got %d: %v", len(res.Warnings), res.Warnings)
+	if len(res.Warnings) == 0 {
+		t.Error("expected warning for codex per-stage override with .claude/ prompt, got none")
+	}
+}
+
+func TestValidate_WarnsCodexPerStageOverrideWithClaudeRequire(t *testing.T) {
+	cfg := &config.Config{
+		Backend:         "claude",
+		JudgeBackend:    "claude",
+		DefaultWorkflow: "full",
+		Workflows:       map[string]config.Workflow{"full": {Stages: []string{"s1"}}},
+		Stages: map[string]config.Stage{
+			"s1": {
+				Skill:    "test",
+				Backend:  "codex",
+				Requires: []string{".claude/commands/ff_implement_plan.md"},
+			},
+		},
+	}
+	res := config.Validate(cfg)
+	if !res.IsValid() {
+		t.Errorf("expected no errors, got: %s", res.Error())
+	}
+	if len(res.Warnings) == 0 {
+		t.Error("expected warning for codex per-stage override with .claude/ require, got none")
 	}
 }
 
