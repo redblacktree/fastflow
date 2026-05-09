@@ -1,4 +1,4 @@
-// Package claude implements the fastflow Backend interface for Claude Code CLI.
+// Package claude implements the fastflow harness interface for Claude Code CLI.
 package claude
 
 import (
@@ -10,18 +10,18 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/redblacktree/fastflow/internal/backend"
+	"github.com/redblacktree/fastflow/internal/harness"
 	"github.com/redblacktree/fastflow/internal/output"
 )
 
-// Backend implements backend.Backend for the Claude Code CLI.
-type Backend struct {
+// Harness implements harness.Harness for the Claude Code CLI.
+type Harness struct {
 	binary       string
 	defaultModel string
 }
 
-// New creates a Claude backend from configuration.
-func New(cfg backend.Config) *Backend {
+// New creates a Claude harness from configuration.
+func New(cfg harness.Config) *Harness {
 	bin := cfg.Binary
 	if bin == "" {
 		bin = "claude"
@@ -30,14 +30,14 @@ func New(cfg backend.Config) *Backend {
 	if model == "" {
 		model = "sonnet"
 	}
-	return &Backend{binary: bin, defaultModel: model}
+	return &Harness{binary: bin, defaultModel: model}
 }
 
-func (b *Backend) Name() string         { return "claude" }
-func (b *Backend) DefaultModel() string { return b.defaultModel }
+func (b *Harness) Name() string         { return "claude" }
+func (b *Harness) DefaultModel() string { return b.defaultModel }
 
-func (b *Backend) Capabilities() backend.Capabilities {
-	return backend.Capabilities{
+func (b *Harness) Capabilities() harness.Capabilities {
+	return harness.Capabilities{
 		SupportsBudget:        true,
 		SupportsMaxTurns:      true,
 		SupportsResume:        true,
@@ -50,7 +50,7 @@ func (b *Backend) Capabilities() backend.Capabilities {
 // If opts.Continue is true, it resumes the most recent session with --continue.
 // If opts.Skill is non-empty, it builds a slash-command prompt.
 // If ANTHROPIC_API_KEY is set but rejected, it retries without the key.
-func (b *Backend) Invoke(opts backend.InvokeOptions) (*backend.InvokeResult, error) {
+func (b *Harness) Invoke(opts harness.InvokeOptions) (*harness.InvokeResult, error) {
 	if opts.Continue {
 		return b.invokeContinue(opts)
 	}
@@ -79,7 +79,7 @@ func (b *Backend) Invoke(opts backend.InvokeOptions) (*backend.InvokeResult, err
 }
 
 // invokeContinue runs claude with --continue to resume the most recent session.
-func (b *Backend) invokeContinue(opts backend.InvokeOptions) (*backend.InvokeResult, error) {
+func (b *Harness) invokeContinue(opts harness.InvokeOptions) (*harness.InvokeResult, error) {
 	args := []string{
 		"--continue",
 		"--model", opts.Model,
@@ -101,7 +101,7 @@ func (b *Backend) invokeContinue(opts backend.InvokeOptions) (*backend.InvokeRes
 }
 
 // invokeWithEnv is the internal implementation that runs Claude with an optional env override.
-func (b *Backend) invokeWithEnv(prompt string, opts backend.InvokeOptions, env []string) (*backend.InvokeResult, error) {
+func (b *Harness) invokeWithEnv(prompt string, opts harness.InvokeOptions, env []string) (*harness.InvokeResult, error) {
 	maxTurns := 50
 	if opts.MaxTurns > 0 {
 		maxTurns = opts.MaxTurns
@@ -147,10 +147,10 @@ func (b *Backend) invokeWithEnv(prompt string, opts backend.InvokeOptions, env [
 			return nil, err
 		}
 		if isNotLoggedIn(result.RawOutput) {
-			return nil, backend.ErrNotLoggedIn
+			return nil, harness.ErrNotLoggedIn
 		}
 		if isRateLimited(result.RawOutput) {
-			return nil, backend.ErrRateLimited
+			return nil, harness.ErrRateLimited
 		}
 		if result.ExitCode != 0 && result.Output == "" {
 			snippet := strings.TrimSpace(result.RawOutput)
@@ -172,7 +172,7 @@ func (b *Backend) invokeWithEnv(prompt string, opts backend.InvokeOptions, env [
 			return nil, err
 		}
 		if isNotLoggedIn(result.RawOutput) {
-			return nil, backend.ErrNotLoggedIn
+			return nil, harness.ErrNotLoggedIn
 		}
 		return result, nil
 	}
@@ -186,7 +186,7 @@ func (b *Backend) invokeWithEnv(prompt string, opts backend.InvokeOptions, env [
 
 	err := cmd.Run()
 
-	result := &backend.InvokeResult{
+	result := &harness.InvokeResult{
 		Output: outputBuf.String(),
 	}
 	result.RawOutput = result.Output
@@ -207,11 +207,11 @@ func (b *Backend) invokeWithEnv(prompt string, opts backend.InvokeOptions, env [
 	}
 
 	if isNotLoggedIn(result.RawOutput) {
-		return nil, backend.ErrNotLoggedIn
+		return nil, harness.ErrNotLoggedIn
 	}
 
 	if isRateLimited(result.RawOutput) {
-		return nil, backend.ErrRateLimited
+		return nil, harness.ErrRateLimited
 	}
 
 	if result.ExitCode != 0 && result.Output == "" {
@@ -250,14 +250,14 @@ const (
 )
 
 // runWithJSONParsing runs Claude with --output-format json and parses the result.
-func (b *Backend) runWithJSONParsing(cmd *exec.Cmd, debug bool) (*backend.InvokeResult, error) {
+func (b *Harness) runWithJSONParsing(cmd *exec.Cmd, debug bool) (*harness.InvokeResult, error) {
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = io.MultiWriter(output.Writer, &stderrBuf)
 
 	err := cmd.Run()
 
-	result := &backend.InvokeResult{
+	result := &harness.InvokeResult{
 		RawOutput: stdoutBuf.String() + stderrBuf.String(),
 	}
 

@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/redblacktree/fastflow/internal/backend"
+	"github.com/redblacktree/fastflow/internal/harness"
 )
 
 // Result represents the outcome of a judge evaluation.
@@ -18,19 +18,19 @@ type Result struct {
 
 // Judge evaluates whether a stage completed successfully.
 type Judge struct {
-	Backend  backend.Backend
+	Harness  harness.Harness
 	Model    string
 	MaxTurns int
 	Debug    bool
 }
 
-// NewJudge creates a new judge with the given backend and model.
-func NewJudge(b backend.Backend, model string) *Judge {
+// NewJudge creates a new judge with the given harness and model.
+func NewJudge(h harness.Harness, model string) *Judge {
 	if model == "" {
-		model = b.DefaultModel()
+		model = h.DefaultModel()
 	}
 	return &Judge{
-		Backend:  b,
+		Harness:  h,
 		Model:    model,
 		MaxTurns: 5,
 		Debug:    false,
@@ -41,7 +41,7 @@ func NewJudge(b backend.Backend, model string) *Judge {
 func (j *Judge) Evaluate(ctx *EvaluationContext) (*Result, error) {
 	prompt := j.buildPrompt(ctx)
 
-	res, err := j.Backend.Invoke(backend.InvokeOptions{
+	res, err := j.Harness.Invoke(harness.InvokeOptions{
 		Prompt:   prompt,
 		Model:    j.Model,
 		WorkDir:  ctx.WorkDir,

@@ -3,7 +3,7 @@ package codex
 import (
 	"strings"
 
-	"github.com/redblacktree/fastflow/internal/backend"
+	"github.com/redblacktree/fastflow/internal/harness"
 )
 
 // classifyAuthError detects Codex CLI auth failures from stderr/stdout output.
@@ -14,14 +14,14 @@ func classifyAuthError(raw string) error {
 	case strings.Contains(lower, "not logged in"),
 		strings.Contains(lower, "run `codex login`"),
 		strings.Contains(lower, "openai_api_key is not set"):
-		return backend.ErrNotLoggedIn
+		return harness.ErrNotLoggedIn
 	case strings.Contains(lower, "401"),
 		strings.Contains(lower, "invalid api key"),
 		strings.Contains(lower, "incorrect api key"):
-		return backend.ErrInvalidAPIKey
+		return harness.ErrInvalidAPIKey
 	case strings.Contains(lower, "rate limit"),
 		strings.Contains(lower, "429"):
-		return backend.ErrRateLimited
+		return harness.ErrRateLimited
 	}
 	return nil
 }

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/redblacktree/fastflow/internal/backend"
+	"github.com/redblacktree/fastflow/internal/harness"
 )
 
 // ---------- stripFrontmatter ----------
@@ -90,7 +90,7 @@ func TestClassifyAuthError_NotLoggedIn(t *testing.T) {
 		"OPENAI_API_KEY is not set",
 	}
 	for _, c := range cases {
-		if err := classifyAuthError(c); err != backend.ErrNotLoggedIn {
+		if err := classifyAuthError(c); err != harness.ErrNotLoggedIn {
 			t.Errorf("classifyAuthError(%q) = %v, want ErrNotLoggedIn", c, err)
 		}
 	}
@@ -103,7 +103,7 @@ func TestClassifyAuthError_InvalidAPIKey(t *testing.T) {
 		"incorrect api key",
 	}
 	for _, c := range cases {
-		if err := classifyAuthError(c); err != backend.ErrInvalidAPIKey {
+		if err := classifyAuthError(c); err != harness.ErrInvalidAPIKey {
 			t.Errorf("classifyAuthError(%q) = %v, want ErrInvalidAPIKey", c, err)
 		}
 	}
@@ -115,7 +115,7 @@ func TestClassifyAuthError_RateLimit(t *testing.T) {
 		"429 Too Many Requests",
 	}
 	for _, c := range cases {
-		if err := classifyAuthError(c); err != backend.ErrRateLimited {
+		if err := classifyAuthError(c); err != harness.ErrRateLimited {
 			t.Errorf("classifyAuthError(%q) = %v, want ErrRateLimited", c, err)
 		}
 	}
@@ -173,10 +173,10 @@ func TestParseCodexStream_VerboseToolActivity(t *testing.T) {
 	}
 }
 
-// ---------- backend interface ----------
+// ---------- harness interface ----------
 
-func TestCodexBackend_Interface(t *testing.T) {
-	b := New(backend.Config{})
+func TestCodexHarness_Interface(t *testing.T) {
+	b := New(harness.Config{})
 	if b.Name() != "codex" {
 		t.Errorf("Name() = %q, want codex", b.Name())
 	}
@@ -198,8 +198,8 @@ func TestCodexBackend_Interface(t *testing.T) {
 	}
 }
 
-func TestCodexBackend_BinaryAndModelOverride(t *testing.T) {
-	b := New(backend.Config{Binary: "/opt/codex", DefaultModel: "gpt-4o"})
+func TestCodexHarness_BinaryAndModelOverride(t *testing.T) {
+	b := New(harness.Config{Binary: "/opt/codex", DefaultModel: "gpt-4o"})
 	if b.binary != "/opt/codex" {
 		t.Errorf("binary = %q, want /opt/codex", b.binary)
 	}

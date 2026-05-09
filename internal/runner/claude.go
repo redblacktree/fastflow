@@ -1,8 +1,8 @@
-// This file's content has moved to internal/backend/claude/.
+// This file's content has moved to internal/harness/claude/.
 // InvokeResult is re-exported here as a type alias for callers that imported it from runner.
 package runner
 
-import bk "github.com/redblacktree/fastflow/internal/backend"
+import hs "github.com/redblacktree/fastflow/internal/harness"
 
 // InvokeResult is re-exported for callers who imported it from runner.
-type InvokeResult = bk.InvokeResult
+type InvokeResult = hs.InvokeResult

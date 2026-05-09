@@ -1,4 +1,4 @@
-// Package codex implements the fastflow Backend interface for OpenAI Codex CLI.
+// Package codex implements the fastflow harness interface for OpenAI Codex CLI.
 package codex
 
 import (
@@ -8,18 +8,18 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/redblacktree/fastflow/internal/backend"
+	"github.com/redblacktree/fastflow/internal/harness"
 	"github.com/redblacktree/fastflow/internal/output"
 )
 
-// Backend implements backend.Backend for the Codex CLI.
-type Backend struct {
+// Harness implements harness.Harness for the Codex CLI.
+type Harness struct {
 	binary       string
 	defaultModel string
 }
 
-// New creates a Codex backend from configuration.
-func New(cfg backend.Config) *Backend {
+// New creates a Codex harness from configuration.
+func New(cfg harness.Config) *Harness {
 	bin := cfg.Binary
 	if bin == "" {
 		bin = "codex"
@@ -28,14 +28,14 @@ func New(cfg backend.Config) *Backend {
 	if model == "" {
 		model = "o4-mini" // current Codex CLI default; see docs/backends.md
 	}
-	return &Backend{binary: bin, defaultModel: model}
+	return &Harness{binary: bin, defaultModel: model}
 }
 
-func (b *Backend) Name() string         { return "codex" }
-func (b *Backend) DefaultModel() string { return b.defaultModel }
+func (b *Harness) Name() string         { return "codex" }
+func (b *Harness) DefaultModel() string { return b.defaultModel }
 
-func (b *Backend) Capabilities() backend.Capabilities {
-	return backend.Capabilities{
+func (b *Harness) Capabilities() harness.Capabilities {
+	return harness.Capabilities{
 		SupportsBudget:        false, // codex has no --max-budget-usd
 		SupportsMaxTurns:      false, // codex has no --max-turns
 		SupportsResume:        true,
@@ -45,7 +45,7 @@ func (b *Backend) Capabilities() backend.Capabilities {
 }
 
 // Invoke runs the Codex CLI with the given options.
-func (b *Backend) Invoke(opts backend.InvokeOptions) (*backend.InvokeResult, error) {
+func (b *Harness) Invoke(opts harness.InvokeOptions) (*harness.InvokeResult, error) {
 	// Build prompt: if Skill, resolve and prepend skill content to SkillContext.
 	prompt := opts.Prompt
 	if opts.Skill != "" {
@@ -80,7 +80,7 @@ func (b *Backend) Invoke(opts backend.InvokeOptions) (*backend.InvokeResult, err
 }
 
 // buildArgs constructs the codex exec argument list.
-func (b *Backend) buildArgs(opts backend.InvokeOptions, lastMsgPath, prompt string) []string {
+func (b *Harness) buildArgs(opts harness.InvokeOptions, lastMsgPath, prompt string) []string {
 	if opts.Continue {
 		// codex exec resume --last replaces "exec" and feeds a follow-up prompt
 		return []string{
@@ -105,7 +105,7 @@ func (b *Backend) buildArgs(opts backend.InvokeOptions, lastMsgPath, prompt stri
 }
 
 // run executes the codex command, parses NDJSON events, reads the last message file.
-func (b *Backend) run(cmd *exec.Cmd, opts backend.InvokeOptions, lastMsgPath string) (*backend.InvokeResult, error) {
+func (b *Harness) run(cmd *exec.Cmd, opts harness.InvokeOptions, lastMsgPath string) (*harness.InvokeResult, error) {
 	stdoutR, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("stdout pipe: %w", err)
@@ -124,7 +124,7 @@ func (b *Backend) run(cmd *exec.Cmd, opts backend.InvokeOptions, lastMsgPath str
 
 	rawOutput := rawEvents + "\n" + stderrBuf.String()
 
-	result := &backend.InvokeResult{
+	result := &harness.InvokeResult{
 		RawOutput: rawOutput,
 		SessionID: sessionID,
 	}

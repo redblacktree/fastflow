@@ -3,6 +3,7 @@ package runner
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,9 +15,9 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	bk "github.com/redblacktree/fastflow/internal/backend"
-	_ "github.com/redblacktree/fastflow/internal/backend/claude" // register claude backend
 	"github.com/redblacktree/fastflow/internal/config"
+	hs "github.com/redblacktree/fastflow/internal/harness"
+	_ "github.com/redblacktree/fastflow/internal/harness/claude" // register claude harness
 	"github.com/redblacktree/fastflow/internal/judge"
 	"github.com/redblacktree/fastflow/internal/output"
 	"github.com/redblacktree/fastflow/internal/state"
@@ -67,18 +68,19 @@ func NewRunner(cfg *config.Config, configPath string) *Runner {
 	}
 }
 
-// backendForStage resolves the right backend for a stage, falling back to the global config backend.
-func (r *Runner) backendForStage(stage *config.Stage) (bk.Backend, error) {
-	name := stage.Backend
-	if name == "" {
-		name = r.Config.Backend
-	}
-	return bk.New(name, r.Config.BackendConfig(name))
+// harnessForStage resolves the right harness for a stage, falling back to the global config harness.
+func (r *Runner) harnessForStage(stage *config.Stage) (hs.Harness, error) {
+	name := r.Config.HarnessForStage(stage)
+	return r.harnessByName(name)
 }
 
-// judgeBackend returns the backend to use for judge evaluation.
-func (r *Runner) judgeBackend() (bk.Backend, error) {
-	return bk.New(r.Config.JudgeBackend, r.Config.BackendConfig(r.Config.JudgeBackend))
+func (r *Runner) harnessByName(name string) (hs.Harness, error) {
+	return hs.New(name, r.Config.HarnessConfig(name))
+}
+
+// judgeHarness returns the harness to use for judge evaluation.
+func (r *Runner) judgeHarness() (hs.Harness, error) {
+	return r.harnessByName(r.Config.JudgeHarnessName())
 }
 
 // Run executes the pipeline for the given context.
@@ -270,10 +272,22 @@ func (r *Runner) Run(ctx *RunContext) error {
 			evalRetries++
 			output.Printf("    %s Stage did not pass evaluation\n", errColor("FAILED"))
 			output.Printf("    Reason: %s\n", judgeResult.Reasoning)
-			output.Printf("    %s Retrying stage with feedback (%d/%d)...\n",
-				warning("RETRY"), evalRetries, maxEvalRetries)
 
-			result, err = r.retryWithFeedback(ctx, stageName, stage, result, judgeResult.Reasoning)
+			retryAttempts, retryAttemptIndex, upgrading, modelErr := r.retryAttemptsForStage(stage, result)
+			if modelErr != nil {
+				runErr = modelErr
+				return runErr
+			}
+			retryAttempt := normalizeAttempt(retryAttempts[retryAttemptIndex], result.Harness)
+			if upgrading {
+				output.Printf("    %s Retrying stage with feedback using harness/model %q/%q (%d/%d)...\n",
+					warning("MODEL"), retryAttempt.Harness, retryAttempt.Model, evalRetries, maxEvalRetries)
+			} else {
+				output.Printf("    %s Retrying stage with feedback (%d/%d)...\n",
+					warning("RETRY"), evalRetries, maxEvalRetries)
+			}
+
+			result, err = r.retryWithFeedback(ctx, stageName, stage, result, judgeResult.Reasoning, retryAttempts, retryAttemptIndex)
 			if err != nil {
 				output.Printf("    %s Retry failed: %v\n", errColor("ERROR"), err)
 				runErr = err
@@ -537,53 +551,40 @@ func (r *Runner) clearRunDirectory(runDir string) error {
 	return nil
 }
 
-// executeStage runs a single stage using the configured backend.
+// executeStage runs a single stage using the configured harness.
 func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.Stage) (*InvokeResult, error) {
-	b, err := r.backendForStage(stage)
+	h, err := r.harnessForStage(stage)
 	if err != nil {
-		return nil, fmt.Errorf("backend init: %w", err)
+		return nil, fmt.Errorf("harness init: %w", err)
 	}
 
-	model := stage.Model
-	if model == "" {
-		model = b.DefaultModel()
-	}
+	primary := r.primaryAttempt(stage, h)
+	attempts := append([]config.ModelAttempt{primary}, stage.BackupModels...)
 
-	caps := b.Capabilities()
+	caps := h.Capabilities()
 
-	// Warn if budget is configured but backend doesn't support it
+	// Warn if budget is configured but harness doesn't support it
 	budgetUsd := r.Config.EffectiveBudget(stage)
 	if budgetUsd > 0 && !caps.SupportsBudget {
 		warning := color.New(color.FgYellow).SprintFunc()
-		output.Printf("    %s Backend %q does not support maxBudgetUsd; ignoring budget cap\n",
-			warning("WARN"), b.Name())
+		output.Printf("    %s Harness %q does not support maxBudgetUsd; ignoring budget cap\n",
+			warning("WARN"), h.Name())
 		budgetUsd = 0
 	}
 
-	// Build the prompt
-	prompt, err := r.buildStagePrompt(ctx, stageName, stage)
+	result, _, err := r.invokeStageAttempts(ctx, stageName, stage, attempts, 0, budgetUsd)
 	if err != nil {
 		return nil, err
 	}
 
-	// Build invoke options
-	opts := bk.InvokeOptions{
-		Model:        model,
-		WorkDir:      ctx.WorkDir,
-		MaxBudgetUsd: budgetUsd,
-		Verbose:      r.Verbose,
-		Debug:        r.Debug,
-	}
-	if stage.Skill != "" {
-		opts.Skill = stage.Skill
-		opts.SkillContext = prompt
-	} else {
-		opts.Prompt = prompt
-	}
-
-	result, err := b.Invoke(opts)
-	if err != nil {
-		return nil, err
+	model := result.Model
+	activeHarness := h
+	if result.Harness != "" && result.Harness != h.Name() {
+		resolved, err := r.harnessByName(result.Harness)
+		if err != nil {
+			return nil, fmt.Errorf("harness init: %w", err)
+		}
+		activeHarness = resolved
 	}
 
 	// Handle max-turns with automatic handoff/resume
@@ -594,7 +595,7 @@ func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.S
 		output.Printf("    %s Max turns reached, attempting handoff/resume (%d/%d)...\n",
 			warning("RESUME"), resumptions, r.MaxResumptions)
 
-		handoffResult, handoffErr := r.runHandoffCycle(ctx, stageName, model, b)
+		handoffResult, handoffErr := r.runHandoffCycle(ctx, stageName, model, activeHarness)
 		if handoffErr != nil {
 			if r.Debug {
 				output.Printf("[DEBUG] Handoff/resume failed: %v\n", handoffErr)
@@ -621,7 +622,7 @@ func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.S
 		output.Printf("    %s Budget exhausted ($%.2f), attempting handoff/resume (%d/%d)...\n",
 			warning("BUDGET"), result.TotalCostUsd, budgetResumptions, r.MaxResumptions)
 
-		handoffResult, handoffErr := r.runBudgetHandoffCycle(ctx, stageName, stage, model, b)
+		handoffResult, handoffErr := r.runBudgetHandoffCycle(ctx, stageName, stage, model, activeHarness)
 		if handoffErr != nil {
 			if r.Debug {
 				output.Printf("[DEBUG] Budget handoff/resume failed: %v\n", handoffErr)
@@ -651,12 +652,197 @@ func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.S
 	return result, nil
 }
 
+func (r *Runner) primaryAttempt(stage *config.Stage, h hs.Harness) config.ModelAttempt {
+	model := strings.TrimSpace(stage.Model)
+	if model == "" {
+		model = h.DefaultModel()
+	}
+	return config.ModelAttempt{
+		Harness: r.Config.HarnessForStage(stage),
+		Model:   model,
+	}
+}
+
+func (r *Runner) invokeStageAttempts(ctx *RunContext, stageName string, stage *config.Stage, attempts []config.ModelAttempt, startIndex int, budgetUsd float64) (*InvokeResult, int, error) {
+	var lastErr error
+	defaultHarness := r.Config.HarnessForStage(stage)
+	for i := startIndex; i < len(attempts); i++ {
+		attempt := normalizeAttempt(attempts[i], defaultHarness)
+		if i > startIndex {
+			warning := color.New(color.FgYellow).SprintFunc()
+			output.Printf("    %s Retrying with fallback harness/model %q/%q...\n", warning("MODEL"), attempt.Harness, attempt.Model)
+		}
+
+		result, err := r.invokeStageAttempt(ctx, stageName, stage, attempt, budgetUsd)
+		if err == nil {
+			return result, i, nil
+		}
+		lastErr = err
+		if i+1 < len(attempts) && shouldTryNextModel(err) {
+			warning := color.New(color.FgYellow).SprintFunc()
+			output.Printf("    %s Harness/model %q/%q failed: %v\n", warning("WARN"), attempt.Harness, attempt.Model, err)
+			continue
+		}
+		return nil, i, err
+	}
+	if lastErr != nil {
+		return nil, len(attempts) - 1, lastErr
+	}
+	return nil, len(attempts) - 1, fmt.Errorf("no model attempts configured for stage")
+}
+
+func (r *Runner) invokePromptAttempts(ctx *RunContext, stage *config.Stage, attempts []config.ModelAttempt, startIndex int, prompt string) (*InvokeResult, error) {
+	var lastErr error
+	defaultHarness := r.Config.HarnessForStage(stage)
+	for i := startIndex; i < len(attempts); i++ {
+		attempt := normalizeAttempt(attempts[i], defaultHarness)
+		if i > startIndex {
+			warning := color.New(color.FgYellow).SprintFunc()
+			output.Printf("    %s Retrying with fallback harness/model %q/%q...\n", warning("MODEL"), attempt.Harness, attempt.Model)
+		}
+		result, err := r.invokePromptAttempt(ctx, stage, attempt, prompt, 0)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if i+1 < len(attempts) && shouldTryNextModel(err) {
+			warning := color.New(color.FgYellow).SprintFunc()
+			output.Printf("    %s Harness/model %q/%q failed: %v\n", warning("WARN"), attempt.Harness, attempt.Model, err)
+			continue
+		}
+		return nil, err
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("no model attempts configured for stage")
+}
+
+func (r *Runner) invokeStageAttempt(ctx *RunContext, stageName string, stage *config.Stage, attempt config.ModelAttempt, budgetUsd float64) (*InvokeResult, error) {
+	attempt = normalizeAttempt(attempt, r.Config.HarnessForStage(stage))
+	attemptStage := stageForAttempt(stage, attempt)
+	prompt, err := r.buildStagePrompt(ctx, stageName, attemptStage)
+	if err != nil {
+		return nil, err
+	}
+	return r.invokePromptAttempt(ctx, stage, attempt, prompt, budgetUsd)
+}
+
+func (r *Runner) invokePromptAttempt(ctx *RunContext, stage *config.Stage, attempt config.ModelAttempt, prompt string, budgetUsd float64) (*InvokeResult, error) {
+	h, err := r.harnessByName(attempt.Harness)
+	if err != nil {
+		return nil, fmt.Errorf("harness init: %w", err)
+	}
+	if strings.TrimSpace(attempt.Model) == "" {
+		attempt.Model = h.DefaultModel()
+	}
+	attemptStage := stageForAttempt(stage, attempt)
+
+	opts := hs.InvokeOptions{
+		Model:        attempt.Model,
+		WorkDir:      ctx.WorkDir,
+		MaxBudgetUsd: budgetUsd,
+		Verbose:      r.Verbose,
+		Debug:        r.Debug,
+	}
+	if attemptStage.Skill != "" {
+		opts.Skill = attemptStage.Skill
+		opts.SkillContext = prompt
+	} else {
+		opts.Prompt = prompt
+	}
+
+	result, err := h.Invoke(opts)
+	if err != nil {
+		return nil, err
+	}
+	result.Harness = attempt.Harness
+	result.Model = attempt.Model
+	return result, nil
+}
+
+func normalizeAttempt(attempt config.ModelAttempt, defaultHarness string) config.ModelAttempt {
+	attempt.Harness = attempt.HarnessName(defaultHarness)
+	attempt.Model = strings.TrimSpace(attempt.Model)
+	return attempt
+}
+
+func stageForAttempt(stage *config.Stage, attempt config.ModelAttempt) *config.Stage {
+	effective := *stage
+	if attempt.PromptFile != "" {
+		effective.PromptFile = attempt.PromptFile
+		effective.Skill = ""
+	}
+	if attempt.Skill != "" {
+		effective.Skill = attempt.Skill
+		effective.PromptFile = ""
+	}
+	if attempt.Requires != nil {
+		effective.Requires = attempt.Requires
+	}
+	effective.Harness = attempt.Harness
+	effective.Backend = ""
+	effective.Model = attempt.Model
+	effective.BackupModels = nil
+	effective.EscalationModels = nil
+	return &effective
+}
+
+func attemptFromResult(stage *config.Stage, result *InvokeResult, defaultHarness string) config.ModelAttempt {
+	attempt := config.ModelAttempt{
+		Harness: result.Harness,
+		Model:   result.Model,
+	}
+	if attempt.Harness == "" {
+		attempt.Harness = defaultHarness
+	}
+	if attempt.Model == "" {
+		attempt.Model = stage.Model
+	}
+	return attempt
+}
+
+func shouldTryNextModel(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, hs.ErrRateLimited) {
+		return true
+	}
+	if errors.Is(err, hs.ErrNotLoggedIn) || errors.Is(err, hs.ErrInvalidAPIKey) {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"rate limit",
+		"429",
+		"overloaded",
+		"capacity",
+		"temporarily unavailable",
+		"try again later",
+		"service unavailable",
+		"resource exhausted",
+		"model not found",
+		"model unavailable",
+		"unsupported model",
+		"invalid model",
+		"503",
+		"529",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // runHandoffCycle runs create_handoff followed by resume_handoff.
-// If the backend doesn't support slash-commands, it skips the cycle with a warning.
-func (r *Runner) runHandoffCycle(ctx *RunContext, stageName string, model string, b bk.Backend) (*InvokeResult, error) {
+// If the harness doesn't support slash-commands, it skips the cycle with a warning.
+func (r *Runner) runHandoffCycle(ctx *RunContext, stageName string, model string, b hs.Harness) (*InvokeResult, error) {
 	if !b.Capabilities().SupportsSlashCommands {
 		warning := color.New(color.FgYellow).SprintFunc()
-		output.Printf("    %s Backend %q does not support slash-command handoff; returning partial result\n",
+		output.Printf("    %s Harness %q does not support slash-command handoff; returning partial result\n",
 			warning("WARN"), b.Name())
 		return &InvokeResult{}, nil
 	}
@@ -668,7 +854,7 @@ func (r *Runner) runHandoffCycle(ctx *RunContext, stageName string, model string
 		output.Printf("[DEBUG] Running create_handoff skill...\n")
 	}
 
-	_, createErr := b.Invoke(bk.InvokeOptions{
+	_, createErr := b.Invoke(hs.InvokeOptions{
 		Skill:        "create_handoff",
 		SkillContext: handoffContext,
 		Model:        model,
@@ -683,7 +869,7 @@ func (r *Runner) runHandoffCycle(ctx *RunContext, stageName string, model string
 		output.Printf("[DEBUG] Running resume_handoff skill...\n")
 	}
 
-	resumeResult, resumeErr := b.Invoke(bk.InvokeOptions{
+	resumeResult, resumeErr := b.Invoke(hs.InvokeOptions{
 		Skill:        "resume_handoff",
 		SkillContext: handoffContext,
 		Model:        model,
@@ -700,9 +886,9 @@ func (r *Runner) runHandoffCycle(ctx *RunContext, stageName string, model string
 // runBudgetHandoffCycle handles context handoff when budget is exhausted.
 // Step 1: --continue on the same session to write .fastflow/handoff.md
 // Step 2: Fresh session reads the handoff and continues the original task
-func (r *Runner) runBudgetHandoffCycle(ctx *RunContext, stageName string, stage *config.Stage, model string, b bk.Backend) (*InvokeResult, error) {
+func (r *Runner) runBudgetHandoffCycle(ctx *RunContext, stageName string, stage *config.Stage, model string, b hs.Harness) (*InvokeResult, error) {
 	if !b.Capabilities().SupportsResume {
-		return nil, fmt.Errorf("backend %q does not support session resume for budget handoff", b.Name())
+		return nil, fmt.Errorf("harness %q does not support session resume for budget handoff", b.Name())
 	}
 
 	handoffPath := filepath.Join(ctx.WorkDir, ".fastflow", "handoff.md")
@@ -726,7 +912,7 @@ Write the handoff document now. This is your only task.`, handoffPath)
 		return nil, fmt.Errorf("failed to create .fastflow directory: %w", err)
 	}
 
-	_, createErr := b.Invoke(bk.InvokeOptions{
+	_, createErr := b.Invoke(hs.InvokeOptions{
 		Continue: true,
 		Prompt:   handoffPrompt,
 		Model:    model,
@@ -764,7 +950,7 @@ Continue the work described in the handoff document. Pick up where the previous 
 	budgetUsd := r.Config.EffectiveBudget(stage)
 
 	var resumeResult *InvokeResult
-	resumeOpts := bk.InvokeOptions{
+	resumeOpts := hs.InvokeOptions{
 		Model:        model,
 		WorkDir:      ctx.WorkDir,
 		MaxBudgetUsd: budgetUsd,
@@ -829,9 +1015,9 @@ func (r *Runner) injectPlaceholders(prompt string, ctx *RunContext) string {
 
 // evaluateStage runs the judge evaluation for a completed stage.
 func (r *Runner) evaluateStage(ctx *RunContext, stageName string, stage *config.Stage, result *InvokeResult) (*judge.Result, error) {
-	jb, err := r.judgeBackend()
+	jb, err := r.judgeHarness()
 	if err != nil {
-		return nil, fmt.Errorf("judge backend init: %w", err)
+		return nil, fmt.Errorf("judge harness init: %w", err)
 	}
 	j := judge.NewJudge(jb, r.Config.JudgeModel)
 	j.Debug = r.Debug
@@ -1018,18 +1204,8 @@ func GetRunDir(workDir, ticket string) string {
 	return filepath.Join(workDir, "thoughts", "shared", "runs", ticket)
 }
 
-// selfAnswer re-invokes the backend with context to answer its own question.
+// selfAnswer re-invokes the harness with context to answer its own question.
 func (r *Runner) selfAnswer(ctx *RunContext, stageName string, stage *config.Stage, previousResult *InvokeResult, question string) (*InvokeResult, error) {
-	b, err := r.backendForStage(stage)
-	if err != nil {
-		return nil, fmt.Errorf("backend init: %w", err)
-	}
-
-	model := stage.Model
-	if model == "" {
-		model = b.DefaultModel()
-	}
-
 	prompt := fmt.Sprintf(`You previously asked a question or presented options while working on a task.
 
 **Original Goal**: %s
@@ -1051,27 +1227,44 @@ Based on the original goal and context above, answer your own question and conti
 Do NOT ask for further clarification. Make a decision and proceed with the implementation.
 `, ctx.Goal, ctx.Ticket, question, truncateForContext(previousResult.Output, 5000))
 
-	return b.Invoke(bk.InvokeOptions{
-		Prompt:  prompt,
-		Model:   model,
-		WorkDir: ctx.WorkDir,
-		Verbose: r.Verbose,
-		Debug:   r.Debug,
-	})
+	return r.invokePromptAttempt(ctx, stage, attemptFromResult(stage, previousResult, r.Config.HarnessForStage(stage)), prompt, 0)
 }
 
 // retryWithFeedback re-invokes a stage with evaluation feedback so it can fix its output.
-func (r *Runner) retryWithFeedback(ctx *RunContext, stageName string, stage *config.Stage, previousResult *InvokeResult, evalFeedback string) (*InvokeResult, error) {
-	b, err := r.backendForStage(stage)
+func (r *Runner) retryAttemptsForStage(stage *config.Stage, previousResult *InvokeResult) ([]config.ModelAttempt, int, bool, error) {
+	h, err := r.harnessForStage(stage)
 	if err != nil {
-		return nil, fmt.Errorf("backend init: %w", err)
+		return nil, 0, false, fmt.Errorf("harness init: %w", err)
 	}
-
-	model := stage.Model
-	if model == "" {
-		model = b.DefaultModel()
+	attempts := append([]config.ModelAttempt{r.primaryAttempt(stage, h)}, stage.EscalationModels...)
+	currentIndex := 0
+	found := false
+	for i, attempt := range attempts {
+		attempt = normalizeAttempt(attempt, r.Config.HarnessForStage(stage))
+		if attempt.Harness == previousResult.Harness && attempt.Model == previousResult.Model {
+			currentIndex = i
+			found = true
+			break
+		}
 	}
+	if !found && previousResult.Model != "" {
+		current := attemptFromResult(stage, previousResult, r.Config.HarnessForStage(stage))
+		attempts = append([]config.ModelAttempt{current}, stage.EscalationModels...)
+		if len(stage.EscalationModels) > 0 {
+			return attempts, 1, true, nil
+		}
+		return attempts, 0, false, nil
+	}
+	if currentIndex+1 < len(attempts) {
+		return attempts, currentIndex + 1, true, nil
+	}
+	if previousResult.Model != "" {
+		return attempts, currentIndex, false, nil
+	}
+	return attempts, 0, false, nil
+}
 
+func (r *Runner) retryWithFeedback(ctx *RunContext, stageName string, stage *config.Stage, previousResult *InvokeResult, evalFeedback string, attempts []config.ModelAttempt, startIndex int) (*InvokeResult, error) {
 	judgePrompt := stage.JudgePrompt
 	if judgePrompt == "" {
 		judgePrompt = r.Config.DefaultJudgePrompt
@@ -1096,20 +1289,7 @@ func (r *Runner) retryWithFeedback(ctx *RunContext, stageName string, stage *con
 Fix the issues identified in the evaluation feedback above. Make sure your output fully satisfies all the evaluation criteria. Do NOT ask for clarification — just fix the issues and complete the stage.
 `, stageName, ctx.Goal, ctx.Ticket, judgePrompt, evalFeedback, truncateForContext(previousResult.Output, 5000))
 
-	opts := bk.InvokeOptions{
-		Model:   model,
-		WorkDir: ctx.WorkDir,
-		Verbose: r.Verbose,
-		Debug:   r.Debug,
-	}
-	if stage.Skill != "" {
-		opts.Skill = stage.Skill
-		opts.SkillContext = prompt
-	} else {
-		opts.Prompt = prompt
-	}
-
-	return b.Invoke(opts)
+	return r.invokePromptAttempts(ctx, stage, attempts, startIndex, prompt)
 }
 
 // promptHumanForAnswer displays the question and reads human input from stdin.
@@ -1160,18 +1340,8 @@ func (r *Runner) promptHumanForAnswer(question string) (string, error) {
 	return answer, nil
 }
 
-// continueWithAnswer re-invokes the backend with the human's answer to continue the task.
+// continueWithAnswer re-invokes the harness with the human's answer to continue the task.
 func (r *Runner) continueWithAnswer(ctx *RunContext, stageName string, stage *config.Stage, previousResult *InvokeResult, question string, answer string) (*InvokeResult, error) {
-	b, err := r.backendForStage(stage)
-	if err != nil {
-		return nil, fmt.Errorf("backend init: %w", err)
-	}
-
-	model := stage.Model
-	if model == "" {
-		model = b.DefaultModel()
-	}
-
 	prompt := fmt.Sprintf(`You previously asked a question while working on a task. The human has provided their answer.
 
 **Original Goal**: %s
@@ -1191,13 +1361,7 @@ func (r *Runner) continueWithAnswer(ctx *RunContext, stageName string, stage *co
 Continue with the task based on the human's answer. Proceed with the implementation.
 `, ctx.Goal, ctx.Ticket, question, answer, truncateForContext(previousResult.Output, 5000))
 
-	return b.Invoke(bk.InvokeOptions{
-		Prompt:  prompt,
-		Model:   model,
-		WorkDir: ctx.WorkDir,
-		Verbose: r.Verbose,
-		Debug:   r.Debug,
-	})
+	return r.invokePromptAttempt(ctx, stage, attemptFromResult(stage, previousResult, r.Config.HarnessForStage(stage)), prompt, 0)
 }
 
 // executeOnComplete runs the on-complete shell command with environment variables

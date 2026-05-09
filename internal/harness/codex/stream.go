@@ -16,9 +16,9 @@ import (
 type codexEvent struct {
 	Type      string          `json:"type"`
 	SessionID string          `json:"session_id"`
-	Name      string          `json:"name"`       // function_call tool name
-	Arguments json.RawMessage `json:"arguments"`  // function_call args
-	Message   string          `json:"message"`    // error message
+	Name      string          `json:"name"`      // function_call tool name
+	Arguments json.RawMessage `json:"arguments"` // function_call args
+	Message   string          `json:"message"`   // error message
 }
 
 // parseCodexStream reads NDJSON events from r, printing tool activity when

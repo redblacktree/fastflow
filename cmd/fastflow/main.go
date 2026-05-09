@@ -14,10 +14,10 @@ import (
 	"syscall"
 
 	"github.com/fatih/color"
-	bk "github.com/redblacktree/fastflow/internal/backend"
-	_ "github.com/redblacktree/fastflow/internal/backend/claude" // register claude backend
-	_ "github.com/redblacktree/fastflow/internal/backend/codex"  // register codex backend
 	"github.com/redblacktree/fastflow/internal/config"
+	hs "github.com/redblacktree/fastflow/internal/harness"
+	_ "github.com/redblacktree/fastflow/internal/harness/claude" // register claude harness
+	_ "github.com/redblacktree/fastflow/internal/harness/codex"  // register codex harness
 	"github.com/redblacktree/fastflow/internal/monitor"
 	"github.com/redblacktree/fastflow/internal/output"
 	"github.com/redblacktree/fastflow/internal/runner"
@@ -58,7 +58,7 @@ var rootCmd = &cobra.Command{
 Goal → Worktree → Research → Plan → Implement → Validate → Commit/PR
 
 Each stage runs in a fresh agent context (Claude Code by default;
-configurable via the "backend" field in orchestrator.json), communicating
+configurable via the "harness" field in orchestrator.json), communicating
 via markdown files in thoughts/.`,
 }
 
@@ -738,6 +738,9 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		if stage.Model != "" {
 			output.Printf(" (model: %s)", stage.Model)
 		}
+		if h := cfg.HarnessForStage(&stage); h != "" {
+			output.Printf(" (harness: %s)", h)
+		}
 		if stage.Checkpoint {
 			output.Printf(" %s", warning("[checkpoint]"))
 		}
@@ -747,6 +750,12 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		}
 		if stage.Skill != "" {
 			output.Printf("      Skill: %s\n", stage.Skill)
+		}
+		if len(stage.BackupModels) > 0 {
+			output.Printf("      Backup models: %v\n", stage.BackupModels)
+		}
+		if len(stage.EscalationModels) > 0 {
+			output.Printf("      Escalation models: %v\n", stage.EscalationModels)
 		}
 	}
 
@@ -762,37 +771,43 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	}
 	output.Printf("%s All dependencies found\n", success("OK"))
 
-	// Check the configured backend binaries
+	// Check the configured harness binaries
 	output.Printf("\n%s Checking runtime dependencies...\n", bold(""))
-	seenBackends := map[string]bool{
-		cfg.Backend:      true,
-		cfg.JudgeBackend: true,
+	seenHarnesses := map[string]bool{
+		cfg.Harness:            true,
+		cfg.JudgeHarnessName(): true,
 	}
 	for _, stage := range cfg.Stages {
+		if stage.Harness != "" {
+			seenHarnesses[stage.Harness] = true
+		}
 		if stage.Backend != "" {
-			seenBackends[stage.Backend] = true
+			seenHarnesses[stage.Backend] = true
+		}
+		for _, attempt := range append(stage.BackupModels, stage.EscalationModels...) {
+			if h := attempt.HarnessName(""); h != "" {
+				seenHarnesses[h] = true
+			}
 		}
 	}
-	for name := range seenBackends {
+	for name := range seenHarnesses {
 		if name == "" {
 			continue
 		}
-		b, err := bk.New(name, cfg.BackendConfig(name))
+		h, err := hs.New(name, cfg.HarnessConfig(name))
 		if err != nil {
-			output.Printf("%s Backend %q: %v\n", errColor("ERROR"), name, err)
+			output.Printf("%s Harness %q: %v\n", errColor("ERROR"), name, err)
 			continue
 		}
-		// Determine binary: use override from backends config if set, else the backend name
+		// Determine binary: use override from harness config if set, else the harness name
 		binary := name
-		if cfg.Backends != nil {
-			if c, ok := cfg.Backends[name]; ok && c.Binary != "" {
-				binary = c.Binary
-			}
+		if c := cfg.HarnessConfig(name); c.Binary != "" {
+			binary = c.Binary
 		}
 		if _, lookErr := exec.LookPath(binary); lookErr != nil {
-			output.Printf("%s %s CLI (%q) not found in PATH\n", warning("WARN"), b.Name(), binary)
+			output.Printf("%s %s CLI (%q) not found in PATH\n", warning("WARN"), h.Name(), binary)
 		} else {
-			output.Printf("%s %s CLI (%q) found\n", success("OK"), b.Name(), binary)
+			output.Printf("%s %s CLI (%q) found\n", success("OK"), h.Name(), binary)
 		}
 	}
 
@@ -861,7 +876,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		output.Printf("\n%s Fastflow initialized!\n", success("SUCCESS"))
 		output.Printf("\n%s Next steps:\n", info(">>>"))
 		output.Printf("    1. Review orchestrator.json and customize workflows\n")
-		output.Printf("    2. (Optional) See docs/backends.md for Codex/Copilot setup; prefer per-stage overrides or codex-quick for Codex\n")
+		output.Printf("    2. (Optional) See docs/backends.md for Codex/Copilot setup; prefer per-stage harness overrides or codex-quick for Codex\n")
 		output.Printf("    3. Run 'fastflow validate' to verify configuration\n")
 		output.Printf("    4. Run 'fastflow run --goal \"...\" --ticket TICKET-123'\n")
 	}

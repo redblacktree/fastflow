@@ -10,9 +10,9 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/redblacktree/fastflow/internal/backend"
-	"github.com/redblacktree/fastflow/internal/output"
 	"github.com/fatih/color"
+	"github.com/redblacktree/fastflow/internal/harness"
+	"github.com/redblacktree/fastflow/internal/output"
 )
 
 // streamEvent represents a single NDJSON line from claude --output-format stream-json.
@@ -45,7 +45,7 @@ var (
 
 // runWithStreamParsing reads stream-json output from Claude, displays tool activity,
 // and returns the final text result.
-func (b *Backend) runWithStreamParsing(cmd *exec.Cmd, debug bool) (*backend.InvokeResult, error) {
+func (b *Harness) runWithStreamParsing(cmd *exec.Cmd, debug bool) (*harness.InvokeResult, error) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
@@ -114,7 +114,7 @@ func (b *Backend) runWithStreamParsing(cmd *exec.Cmd, debug bool) (*backend.Invo
 
 	allOutput := strings.Join(nonJSONLines, "\n") + "\n" + stderrBuf.String()
 
-	result := &backend.InvokeResult{
+	result := &harness.InvokeResult{
 		Output:       finalOutput,
 		RawOutput:    allOutput,
 		HitBudgetCap: resultSubtype == subtypeBudgetExhausted,

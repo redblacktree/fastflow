@@ -3,29 +3,29 @@ package judge
 import (
 	"testing"
 
-	"github.com/redblacktree/fastflow/internal/backend"
+	"github.com/redblacktree/fastflow/internal/harness"
 )
 
-// fakeBackend is a minimal backend.Backend for testing the judge.
-type fakeBackend struct {
+// fakeHarness is a minimal harness.Harness for testing the judge.
+type fakeHarness struct {
 	output      string
 	err         error
-	lastOptions backend.InvokeOptions
+	lastOptions harness.InvokeOptions
 }
 
-func (f *fakeBackend) Name() string                       { return "fake" }
-func (f *fakeBackend) DefaultModel() string               { return "fake-model" }
-func (f *fakeBackend) Capabilities() backend.Capabilities { return backend.Capabilities{} }
-func (f *fakeBackend) Invoke(opts backend.InvokeOptions) (*backend.InvokeResult, error) {
+func (f *fakeHarness) Name() string                       { return "fake" }
+func (f *fakeHarness) DefaultModel() string               { return "fake-model" }
+func (f *fakeHarness) Capabilities() harness.Capabilities { return harness.Capabilities{} }
+func (f *fakeHarness) Invoke(opts harness.InvokeOptions) (*harness.InvokeResult, error) {
 	f.lastOptions = opts
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &backend.InvokeResult{Output: f.output}, nil
+	return &harness.InvokeResult{Output: f.output}, nil
 }
 
 func TestNewJudge_DefaultsModel(t *testing.T) {
-	fb := &fakeBackend{}
+	fb := &fakeHarness{}
 	j := NewJudge(fb, "")
 	if j.Model != "fake-model" {
 		t.Errorf("Model = %q, want fake-model", j.Model)
@@ -36,7 +36,7 @@ func TestNewJudge_DefaultsModel(t *testing.T) {
 }
 
 func TestNewJudge_ExplicitModel(t *testing.T) {
-	fb := &fakeBackend{}
+	fb := &fakeHarness{}
 	j := NewJudge(fb, "haiku")
 	if j.Model != "haiku" {
 		t.Errorf("Model = %q, want haiku", j.Model)
@@ -44,7 +44,7 @@ func TestNewJudge_ExplicitModel(t *testing.T) {
 }
 
 func TestParseResponse_Yes(t *testing.T) {
-	fb := &fakeBackend{output: "YES: it worked great"}
+	fb := &fakeHarness{output: "YES: it worked great"}
 	j := NewJudge(fb, "m")
 	res, err := j.Evaluate(&EvaluationContext{JudgePrompt: "did it work?"})
 	if err != nil {
@@ -59,7 +59,7 @@ func TestParseResponse_Yes(t *testing.T) {
 }
 
 func TestParseResponse_No(t *testing.T) {
-	fb := &fakeBackend{output: "NO: missing output file"}
+	fb := &fakeHarness{output: "NO: missing output file"}
 	j := NewJudge(fb, "m")
 	res, err := j.Evaluate(&EvaluationContext{JudgePrompt: "did it work?"})
 	if err != nil {
@@ -74,7 +74,7 @@ func TestParseResponse_No(t *testing.T) {
 }
 
 func TestParseResponse_Interactive(t *testing.T) {
-	fb := &fakeBackend{output: "INTERACTIVE: which branch should I use?"}
+	fb := &fakeHarness{output: "INTERACTIVE: which branch should I use?"}
 	j := NewJudge(fb, "m")
 	res, err := j.Evaluate(&EvaluationContext{JudgePrompt: "did it work?"})
 	if err != nil {
@@ -86,7 +86,7 @@ func TestParseResponse_Interactive(t *testing.T) {
 }
 
 func TestParseResponse_Unparseable(t *testing.T) {
-	fb := &fakeBackend{output: "I think it went well"}
+	fb := &fakeHarness{output: "I think it went well"}
 	j := NewJudge(fb, "m")
 	res, err := j.Evaluate(&EvaluationContext{JudgePrompt: "did it work?"})
 	if err != nil {
@@ -98,7 +98,7 @@ func TestParseResponse_Unparseable(t *testing.T) {
 }
 
 func TestEvaluatePassesWorkDirToBackend(t *testing.T) {
-	fb := &fakeBackend{output: "YES: ok"}
+	fb := &fakeHarness{output: "YES: ok"}
 	j := NewJudge(fb, "m")
 	_, err := j.Evaluate(&EvaluationContext{
 		JudgePrompt: "did it work?",
