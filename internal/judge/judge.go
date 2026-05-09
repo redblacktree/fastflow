@@ -44,6 +44,7 @@ func (j *Judge) Evaluate(ctx *EvaluationContext) (*Result, error) {
 	res, err := j.Backend.Invoke(backend.InvokeOptions{
 		Prompt:   prompt,
 		Model:    j.Model,
+		WorkDir:  ctx.WorkDir,
 		MaxTurns: j.MaxTurns,
 		Debug:    j.Debug,
 	})
@@ -62,6 +63,7 @@ type EvaluationContext struct {
 	JudgePrompt    string
 	CLIOutput      string
 	OutputFilePath string
+	WorkDir        string
 }
 
 // buildPrompt constructs the evaluation prompt for the judge.

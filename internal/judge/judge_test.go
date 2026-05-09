@@ -8,14 +8,16 @@ import (
 
 // fakeBackend is a minimal backend.Backend for testing the judge.
 type fakeBackend struct {
-	output string
-	err    error
+	output      string
+	err         error
+	lastOptions backend.InvokeOptions
 }
 
-func (f *fakeBackend) Name() string                                         { return "fake" }
-func (f *fakeBackend) DefaultModel() string                                 { return "fake-model" }
-func (f *fakeBackend) Capabilities() backend.Capabilities                  { return backend.Capabilities{} }
-func (f *fakeBackend) Invoke(_ backend.InvokeOptions) (*backend.InvokeResult, error) {
+func (f *fakeBackend) Name() string                       { return "fake" }
+func (f *fakeBackend) DefaultModel() string               { return "fake-model" }
+func (f *fakeBackend) Capabilities() backend.Capabilities { return backend.Capabilities{} }
+func (f *fakeBackend) Invoke(opts backend.InvokeOptions) (*backend.InvokeResult, error) {
+	f.lastOptions = opts
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -92,5 +94,20 @@ func TestParseResponse_Unparseable(t *testing.T) {
 	}
 	if res.Success {
 		t.Error("expected Success=false for unparseable response")
+	}
+}
+
+func TestEvaluatePassesWorkDirToBackend(t *testing.T) {
+	fb := &fakeBackend{output: "YES: ok"}
+	j := NewJudge(fb, "m")
+	_, err := j.Evaluate(&EvaluationContext{
+		JudgePrompt: "did it work?",
+		WorkDir:     "/tmp/work",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fb.lastOptions.WorkDir != "/tmp/work" {
+		t.Errorf("WorkDir = %q, want /tmp/work", fb.lastOptions.WorkDir)
 	}
 }
