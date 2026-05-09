@@ -5,7 +5,8 @@
 
   "defaults": {
     "maxBudgetUsd": 0,
-    "_maxBudgetNote": "Set maxBudgetUsd to enable automatic context handoff when budget is exhausted. Pricing basis (as of 2025): Sonnet ~$0.60/context window, Opus ~$3.60/context window. Recommended: 2-5x a single context window cost. Set to 0 to disable."
+    "_maxBudgetNote": "Set maxBudgetUsd to enable automatic context handoff when budget is exhausted. Pricing basis (as of 2025): Sonnet ~$0.60/context window, Opus ~$3.60/context window. Recommended: 2-5x a single context window cost. Set to 0 to disable.",
+    "_modelFallbackNote": "Use backup_models for transient capacity/rate-limit failures and escalation_models for judge-failed retries. Entries look like {\"harness\":\"claude\",\"model\":\"opus\"}."
   },
 
   "workflows": {
@@ -105,12 +106,12 @@
       "judge_prompt": "Did the reply-to-comments stage complete? Check the CLI output for: 1) PR comments were identified, 2) Replies were posted to addressed comments, 3) A summary of replies was provided."
     },
     "implement-codex": {
-      "backend": "codex",
+      "harness": "codex",
       "prompt_file": ".codex/stages/implement.md",
       "judge_prompt": "Did implementation make progress? Check the CLI output for code changes and absence of critical errors."
     },
     "commit-codex": {
-      "backend": "codex",
+      "harness": "codex",
       "prompt_file": ".codex/stages/commit.md",
       "judge_prompt": "Was the commit created successfully? Look for a git commit hash in the output."
     }

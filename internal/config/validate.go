@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/redblacktree/fastflow/internal/backend"
+	"github.com/redblacktree/fastflow/internal/harness"
 )
 
 // ValidationError represents a configuration validation error.
@@ -43,8 +43,8 @@ func (r *ValidationResult) Error() string {
 	return sb.String()
 }
 
-// resolveBackendName returns the name treating empty as the default "claude".
-func resolveBackendName(name string) string {
+// resolveHarnessName returns the name treating empty as the default "claude".
+func resolveHarnessName(name string) string {
 	if name == "" {
 		return "claude"
 	}
@@ -65,39 +65,39 @@ func Validate(cfg *Config) *ValidationResult {
 		}
 	}
 
-	// Check that the global backend is registered.
-	globalBackend := resolveBackendName(cfg.Backend)
-	if _, err := backend.New(globalBackend, cfg.BackendConfig(globalBackend)); err != nil {
+	// Check that the global harness is registered.
+	globalHarness := resolveHarnessName(firstNonEmpty(cfg.Harness, cfg.Backend))
+	if _, err := harness.New(globalHarness, cfg.HarnessConfig(globalHarness)); err != nil {
 		result.Errors = append(result.Errors, ValidationError{
-			Field:   "backend",
+			Field:   "harness",
 			Message: err.Error(),
 		})
 	}
 
-	// Check that the judge backend is registered.
-	judgeBackend := resolveBackendName(cfg.JudgeBackend)
-	if _, err := backend.New(judgeBackend, cfg.BackendConfig(judgeBackend)); err != nil {
+	// Check that the judge harness is registered.
+	judgeHarness := resolveHarnessName(firstNonEmpty(cfg.JudgeHarness, cfg.JudgeBackend, globalHarness))
+	if _, err := harness.New(judgeHarness, cfg.HarnessConfig(judgeHarness)); err != nil {
 		result.Errors = append(result.Errors, ValidationError{
-			Field:   "judge_backend",
+			Field:   "judge_harness",
 			Message: err.Error(),
 		})
 	}
 
-	// Warn when a stage's effective backend is non-Claude but the stage still
+	// Warn when a stage's effective harness is non-Claude but the stage still
 	// references Claude slash-command paths (.claude/). Those stages will fail at
-	// runtime because Codex (and other non-Claude backends) cannot execute
+	// runtime because Codex (and other non-Claude harnesses) cannot execute
 	// slash-command skills. Users should either keep those stages on Claude or
-	// author backend-specific prompt files that do not rely on /slash-commands.
+	// author harness-specific prompt files that do not rely on /slash-commands.
 	for stageName, stage := range cfg.Stages {
-		effectiveBackend := resolveBackendName(cfg.BackendForStage(&stage))
-		if effectiveBackend == "claude" || !stageUsesClaudePaths(stage) {
+		effectiveHarness := resolveHarnessName(cfg.HarnessForStage(&stage))
+		if effectiveHarness == "claude" || !stageUsesClaudePaths(stage) {
 			continue
 		}
 		result.Warnings = append(result.Warnings, ValidationError{
 			Field: fmt.Sprintf("stages.%s", stageName),
 			Message: fmt.Sprintf(
-				"stage uses .claude/ paths but will run under backend %q, which cannot execute Claude slash-command skills; the stage will fail at runtime",
-				effectiveBackend,
+				"stage uses .claude/ paths but will run under harness %q, which cannot execute Claude slash-command skills; the stage will fail at runtime",
+				effectiveHarness,
 			),
 		})
 	}
@@ -132,19 +132,17 @@ func Validate(cfg *Config) *ValidationResult {
 			})
 		}
 
-		// Per-stage backend override must also be registered.
-		if stage.Backend != "" {
-			if _, err := backend.New(stage.Backend, cfg.BackendConfig(stage.Backend)); err != nil {
-				result.Errors = append(result.Errors, ValidationError{
-					Field:   fmt.Sprintf("stages.%s.backend", name),
-					Message: err.Error(),
-				})
-			}
+		// Per-stage harness override must also be registered.
+		stageHarness := firstNonEmpty(stage.Harness, stage.Backend)
+		if stageHarness != "" {
+			validateHarness(result, cfg, fmt.Sprintf("stages.%s.harness", name), stageHarness)
 		}
 
 		// Note: model-name validation is intentionally NOT enforced here.
-		// Model names are delegated to the backend at invocation time so that
+		// Model names are delegated to the harness at invocation time so that
 		// new model releases don't require fastflow config changes.
+		validateAttempts(result, cfg, name, "backup_models", stage.BackupModels)
+		validateAttempts(result, cfg, name, "escalation_models", stage.EscalationModels)
 
 		// Check maxBudgetUsd is non-negative if set
 		if stage.MaxBudgetUsd != nil && *stage.MaxBudgetUsd < 0 {
@@ -164,6 +162,48 @@ func Validate(cfg *Config) *ValidationResult {
 	}
 
 	return result
+}
+
+func validateAttempts(result *ValidationResult, cfg *Config, stageName, field string, attempts []ModelAttempt) {
+	for i, attempt := range attempts {
+		prefix := fmt.Sprintf("stages.%s.%s[%d]", stageName, field, i)
+		if strings.TrimSpace(attempt.Model) == "" {
+			result.Errors = append(result.Errors, ValidationError{
+				Field:   prefix + ".model",
+				Message: "model name must not be empty",
+			})
+		}
+		if attempt.Harness != "" || attempt.Backend != "" {
+			validateHarness(result, cfg, prefix+".harness", attempt.HarnessName(""))
+		}
+		if attempt.PromptFile == "" && attempt.Skill == "" {
+			continue
+		}
+		if attempt.PromptFile != "" && attempt.Skill != "" {
+			result.Errors = append(result.Errors, ValidationError{
+				Field:   prefix,
+				Message: "attempt must not set both prompt_file and skill",
+			})
+		}
+	}
+}
+
+func validateHarness(result *ValidationResult, cfg *Config, field, name string) {
+	if _, err := harness.New(name, cfg.HarnessConfig(name)); err != nil {
+		result.Errors = append(result.Errors, ValidationError{
+			Field:   field,
+			Message: err.Error(),
+		})
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func stageUsesClaudePaths(stage Stage) bool {
@@ -203,7 +243,32 @@ func ValidateDependencies(cfg *Config) *ValidationResult {
 				})
 			}
 		}
+
+		validateAttemptDependencies(result, name, "backup_models", stage.BackupModels)
+		validateAttemptDependencies(result, name, "escalation_models", stage.EscalationModels)
 	}
 
 	return result
+}
+
+func validateAttemptDependencies(result *ValidationResult, stageName, field string, attempts []ModelAttempt) {
+	for i, attempt := range attempts {
+		prefix := fmt.Sprintf("stages.%s.%s[%d]", stageName, field, i)
+		if attempt.PromptFile != "" {
+			if _, err := os.Stat(attempt.PromptFile); os.IsNotExist(err) {
+				result.Errors = append(result.Errors, ValidationError{
+					Field:   prefix + ".prompt_file",
+					Message: fmt.Sprintf("file not found: %s", attempt.PromptFile),
+				})
+			}
+		}
+		for j, req := range attempt.Requires {
+			if _, err := os.Stat(req); os.IsNotExist(err) {
+				result.Errors = append(result.Errors, ValidationError{
+					Field:   fmt.Sprintf("%s.requires[%d]", prefix, j),
+					Message: fmt.Sprintf("required file not found: %s", req),
+				})
+			}
+		}
+	}
 }

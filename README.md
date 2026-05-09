@@ -12,15 +12,15 @@ Goal → Worktree → Research → Plan → Implement → Validate → Commit/PR
 
 Each stage communicates via markdown files in `thoughts/`, enabling clean handoffs between agent contexts.
 
-The default backend is **Claude Code**. You can also run stages using **OpenAI Codex CLI** by
-setting `"backend": "codex"` on individual stages (or using the built-in `codex-quick` workflow).
+The default harness is **Claude Code**. You can also run stages using **OpenAI Codex CLI** by
+setting `"harness": "codex"` on individual stages (or using the built-in `codex-quick` workflow).
 The default Claude workflows use Claude slash-command skills that Codex cannot execute, so Codex
 works per-stage rather than as a global drop-in. See [docs/backends.md](docs/backends.md) for the
-full capability matrix, setup instructions, and how to add new backends.
+full capability matrix, setup instructions, and how to add new harnesses.
 
 ## Prerequisites
 
-- A coding agent CLI installed and authenticated. Supported backends:
+- A coding agent CLI installed and authenticated. Supported harnesses:
   - **Claude Code** (default): <https://claude.ai/claude-code>
   - **Codex CLI**: <https://github.com/openai/codex>
 
@@ -206,11 +206,11 @@ Each entry includes: `ticket`, `status`, `stage`, `created`, `updated_at`, `pid`
 fastflow uses `orchestrator.json` for workflow configuration. See the included config for examples of:
 
 - Defining workflows and their stages
-- Configuring stage models and backends
+- Configuring stage harnesses plus the new `backup_models` and `escalation_models` retry values
 - Setting up checkpoints for human review
 - Custom judge prompts for stage validation
 
-See [docs/backends.md](docs/backends.md) for backend setup, the capability matrix, and fallback behavior.
+See [docs/backends.md](docs/backends.md) for harness setup, the new config values, the capability matrix, and fallback behavior.
 
 ### fastflow reconcile stale-handoff
 

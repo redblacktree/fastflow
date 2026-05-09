@@ -3,7 +3,7 @@ package config
 import (
 	"testing"
 
-	_ "github.com/redblacktree/fastflow/internal/backend/claude"
+	_ "github.com/redblacktree/fastflow/internal/harness/claude"
 )
 
 func TestValidate_NegativeStageBudget(t *testing.T) {

@@ -1,35 +1,35 @@
-package backend_test
+package harness_test
 
 import (
 	"testing"
 
-	"github.com/redblacktree/fastflow/internal/backend"
-	_ "github.com/redblacktree/fastflow/internal/backend/claude"
-	_ "github.com/redblacktree/fastflow/internal/backend/codex"
+	"github.com/redblacktree/fastflow/internal/harness"
+	_ "github.com/redblacktree/fastflow/internal/harness/claude"
+	_ "github.com/redblacktree/fastflow/internal/harness/codex"
 )
 
 func TestRegistryHasClaudeAndCodex(t *testing.T) {
-	names := backend.Names()
+	names := harness.Names()
 	found := map[string]bool{}
 	for _, n := range names {
 		found[n] = true
 	}
 	if !found["claude"] {
-		t.Error("claude backend not registered")
+		t.Error("claude harness not registered")
 	}
 	if !found["codex"] {
-		t.Error("codex backend not registered")
+		t.Error("codex harness not registered")
 	}
 }
 
-func TestNew_UnknownBackend(t *testing.T) {
-	if _, err := backend.New("nonexistent", backend.Config{}); err == nil {
-		t.Error("expected error for unknown backend")
+func TestNew_UnknownHarness(t *testing.T) {
+	if _, err := harness.New("nonexistent", harness.Config{}); err == nil {
+		t.Error("expected error for unknown harness")
 	}
 }
 
 func TestNew_ClaudeDefaults(t *testing.T) {
-	b, err := backend.New("claude", backend.Config{})
+	b, err := harness.New("claude", harness.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestNew_ClaudeDefaults(t *testing.T) {
 }
 
 func TestNew_ClaudeBinaryAndModelOverride(t *testing.T) {
-	b, err := backend.New("claude", backend.Config{Binary: "/opt/claude", DefaultModel: "opus"})
+	b, err := harness.New("claude", harness.Config{Binary: "/opt/claude", DefaultModel: "opus"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestNew_ClaudeBinaryAndModelOverride(t *testing.T) {
 }
 
 func TestNew_CodexDefaults(t *testing.T) {
-	b, err := backend.New("codex", backend.Config{})
+	b, err := harness.New("codex", harness.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

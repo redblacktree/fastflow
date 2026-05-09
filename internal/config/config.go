@@ -7,8 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
-	"github.com/redblacktree/fastflow/internal/backend"
+	"github.com/redblacktree/fastflow/internal/harness"
 )
 
 // Defaults holds global default settings that can be overridden per-stage.
@@ -23,9 +24,12 @@ type Config struct {
 	DefaultWorkflow    string                    `json:"default_workflow"`
 	DefaultJudgePrompt string                    `json:"default_judge_prompt"`
 	JudgeModel         string                    `json:"judge_model"`
-	JudgeBackend       string                    `json:"judge_backend,omitempty"` // empty = Backend
-	Backend            string                    `json:"backend,omitempty"`       // empty = "claude"
-	Backends           map[string]backend.Config `json:"backends,omitempty"`      // per-backend settings
+	JudgeHarness       string                    `json:"judge_harness,omitempty"` // empty = Harness
+	Harness            string                    `json:"harness,omitempty"`       // empty = "claude"
+	Harnesses          map[string]harness.Config `json:"harnesses,omitempty"`     // per-harness settings
+	JudgeBackend       string                    `json:"judge_backend,omitempty"` // deprecated alias for JudgeHarness
+	Backend            string                    `json:"backend,omitempty"`       // deprecated alias for Harness
+	Backends           map[string]harness.Config `json:"backends,omitempty"`      // deprecated alias for Harnesses
 	Defaults           Defaults                  `json:"defaults,omitempty"`
 }
 
@@ -39,14 +43,39 @@ type Workflow struct {
 
 // Stage defines a pipeline stage configuration.
 type Stage struct {
-	PromptFile   string   `json:"prompt_file,omitempty"`
-	Skill        string   `json:"skill,omitempty"`
-	Requires     []string `json:"requires,omitempty"`
-	Model        string   `json:"model,omitempty"`
-	Backend      string   `json:"backend,omitempty"` // per-stage override; empty = Config.Backend
-	Checkpoint   bool     `json:"checkpoint,omitempty"`
-	JudgePrompt  string   `json:"judge_prompt,omitempty"`
-	MaxBudgetUsd *float64 `json:"maxBudgetUsd,omitempty"`
+	PromptFile       string         `json:"prompt_file,omitempty"`
+	Skill            string         `json:"skill,omitempty"`
+	Requires         []string       `json:"requires,omitempty"`
+	Model            string         `json:"model,omitempty"`
+	BackupModels     []ModelAttempt `json:"backup_models,omitempty"`
+	EscalationModels []ModelAttempt `json:"escalation_models,omitempty"`
+	Harness          string         `json:"harness,omitempty"` // per-stage override; empty = Config.Harness
+	Backend          string         `json:"backend,omitempty"` // deprecated alias for Harness
+	Checkpoint       bool           `json:"checkpoint,omitempty"`
+	JudgePrompt      string         `json:"judge_prompt,omitempty"`
+	MaxBudgetUsd     *float64       `json:"maxBudgetUsd,omitempty"`
+}
+
+// ModelAttempt describes one retry attempt. Harness is the public name;
+// Backend remains as a deprecated compatibility alias.
+type ModelAttempt struct {
+	Harness    string   `json:"harness,omitempty"`
+	Backend    string   `json:"backend,omitempty"`
+	Model      string   `json:"model,omitempty"`
+	PromptFile string   `json:"prompt_file,omitempty"`
+	Skill      string   `json:"skill,omitempty"`
+	Requires   []string `json:"requires,omitempty"`
+}
+
+// HarnessName returns the explicit harness or a caller-provided default.
+func (a ModelAttempt) HarnessName(defaultHarness string) string {
+	if strings.TrimSpace(a.Harness) != "" {
+		return strings.TrimSpace(a.Harness)
+	}
+	if strings.TrimSpace(a.Backend) != "" {
+		return strings.TrimSpace(a.Backend)
+	}
+	return defaultHarness
 }
 
 // EffectiveBudget returns the maxBudgetUsd for a stage, falling back to the
@@ -58,20 +87,61 @@ func (c *Config) EffectiveBudget(stage *Stage) float64 {
 	return c.Defaults.MaxBudgetUsd
 }
 
-// BackendConfig returns the per-backend config block, or zero value if absent.
-func (c *Config) BackendConfig(name string) backend.Config {
-	if c.Backends == nil {
-		return backend.Config{}
+// HarnessConfig returns the per-harness config block, or zero value if absent.
+func (c *Config) HarnessConfig(name string) harness.Config {
+	if c.Harnesses != nil {
+		if cfg, ok := c.Harnesses[name]; ok {
+			return cfg
+		}
 	}
-	return c.Backends[name]
+	if c.Backends != nil {
+		return c.Backends[name]
+	}
+	return harness.Config{}
 }
 
-// BackendForStage returns the backend name for a stage, falling back to the global backend.
-func (c *Config) BackendForStage(stage *Stage) string {
+// BackendConfig is the deprecated alias for HarnessConfig.
+func (c *Config) BackendConfig(name string) harness.Config {
+	return c.HarnessConfig(name)
+}
+
+// HarnessForStage returns the harness name for a stage, falling back to the global harness.
+func (c *Config) HarnessForStage(stage *Stage) string {
+	if stage.Harness != "" {
+		return stage.Harness
+	}
 	if stage.Backend != "" {
 		return stage.Backend
 	}
-	return c.Backend
+	if c.Harness != "" {
+		return c.Harness
+	}
+	if c.Backend != "" {
+		return c.Backend
+	}
+	return "claude"
+}
+
+// BackendForStage is the deprecated alias for HarnessForStage.
+func (c *Config) BackendForStage(stage *Stage) string {
+	return c.HarnessForStage(stage)
+}
+
+// JudgeHarnessName returns the configured judge harness.
+func (c *Config) JudgeHarnessName() string {
+	if c.JudgeHarness != "" {
+		return c.JudgeHarness
+	}
+	if c.JudgeBackend != "" {
+		return c.JudgeBackend
+	}
+	if c.Harness != "" {
+		return c.Harness
+	}
+	if c.Backend != "" {
+		return c.Backend
+	}
+	return "claude"
 }
 
 // Load reads and parses a config file from the given path.
@@ -101,11 +171,23 @@ func Load(path string) (*Config, error) {
 	if cfg.DefaultJudgePrompt == "" {
 		cfg.DefaultJudgePrompt = "Did this stage complete successfully? Look for clear evidence that the required work was done. Respond with YES or NO followed by a brief explanation."
 	}
+	if cfg.Harness == "" {
+		cfg.Harness = cfg.Backend
+	}
+	if cfg.Harness == "" {
+		cfg.Harness = "claude"
+	}
 	if cfg.Backend == "" {
-		cfg.Backend = "claude"
+		cfg.Backend = cfg.Harness
+	}
+	if cfg.JudgeHarness == "" {
+		cfg.JudgeHarness = cfg.JudgeBackend
+	}
+	if cfg.JudgeHarness == "" {
+		cfg.JudgeHarness = cfg.Harness
 	}
 	if cfg.JudgeBackend == "" {
-		cfg.JudgeBackend = cfg.Backend
+		cfg.JudgeBackend = cfg.JudgeHarness
 	}
 
 	return &cfg, nil
