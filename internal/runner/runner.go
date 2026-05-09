@@ -848,6 +848,7 @@ func (r *Runner) evaluateStage(ctx *RunContext, stageName string, stage *config.
 		JudgePrompt:    judgePrompt,
 		CLIOutput:      result.Output,
 		OutputFilePath: filepath.Join(ctx.RunDir, stageName+".md"),
+		WorkDir:        ctx.WorkDir,
 	}
 
 	return j.Evaluate(evalCtx)
