@@ -751,11 +751,11 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		if stage.Skill != "" {
 			output.Printf("      Skill: %s\n", stage.Skill)
 		}
-		if len(stage.BackupModels) > 0 {
-			output.Printf("      Backup models: %v\n", stage.BackupModels)
+		if len(stage.BackupAttempts()) > 0 {
+			output.Printf("      Backup: %v\n", stage.BackupAttempts())
 		}
-		if len(stage.EscalationModels) > 0 {
-			output.Printf("      Escalation models: %v\n", stage.EscalationModels)
+		if len(stage.EscalationAttempts()) > 0 {
+			output.Printf("      Escalation: %v\n", stage.EscalationAttempts())
 		}
 	}
 
@@ -784,7 +784,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		if stage.Backend != "" {
 			seenHarnesses[stage.Backend] = true
 		}
-		for _, attempt := range append(stage.BackupModels, stage.EscalationModels...) {
+		for _, attempt := range append(stage.BackupAttempts(), stage.EscalationAttempts()...) {
 			if h := attempt.HarnessName(""); h != "" {
 				seenHarnesses[h] = true
 			}

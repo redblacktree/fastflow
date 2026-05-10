@@ -13,9 +13,10 @@ Goal → Worktree → Research → Plan → Implement → Validate → Commit/PR
 Each stage communicates via markdown files in `thoughts/`, enabling clean handoffs between agent contexts.
 
 The default harness is **Claude Code**. You can also run stages using **OpenAI Codex CLI** by
-setting `"harness": "codex"` on individual stages (or using the built-in `codex-quick` workflow).
-The default Claude workflows use Claude slash-command skills that Codex cannot execute, so Codex
-works per-stage rather than as a global drop-in. See [docs/backends.md](docs/backends.md) for the
+setting `"harness": "codex"` on individual stages or using the built-in Codex workflows
+(`codex-quick`, `codex-full`, `codex-debug`, and review variants). The default Claude
+workflows use Claude slash-command skills, while Codex workflows use `.codex/stages/`
+prompts and `.codex/skills/` skills. See [docs/backends.md](docs/backends.md) for the
 full capability matrix, setup instructions, and how to add new harnesses.
 
 ## Prerequisites
@@ -206,7 +207,7 @@ Each entry includes: `ticket`, `status`, `stage`, `created`, `updated_at`, `pid`
 fastflow uses `orchestrator.json` for workflow configuration. See the included config for examples of:
 
 - Defining workflows and their stages
-- Configuring stage harnesses plus the new `backup_models` and `escalation_models` retry values
+- Configuring stage harnesses plus the new `backup` and `escalation` retry attempts
 - Setting up checkpoints for human review
 - Custom judge prompts for stage validation
 

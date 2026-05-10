@@ -141,8 +141,8 @@ func Validate(cfg *Config) *ValidationResult {
 		// Note: model-name validation is intentionally NOT enforced here.
 		// Model names are delegated to the harness at invocation time so that
 		// new model releases don't require fastflow config changes.
-		validateAttempts(result, cfg, name, "backup_models", stage.BackupModels)
-		validateAttempts(result, cfg, name, "escalation_models", stage.EscalationModels)
+		validateAttempts(result, cfg, name, "backup", stage.BackupAttempts())
+		validateAttempts(result, cfg, name, "escalation", stage.EscalationAttempts())
 
 		// Check maxBudgetUsd is non-negative if set
 		if stage.MaxBudgetUsd != nil && *stage.MaxBudgetUsd < 0 {
@@ -244,8 +244,8 @@ func ValidateDependencies(cfg *Config) *ValidationResult {
 			}
 		}
 
-		validateAttemptDependencies(result, name, "backup_models", stage.BackupModels)
-		validateAttemptDependencies(result, name, "escalation_models", stage.EscalationModels)
+		validateAttemptDependencies(result, name, "backup", stage.BackupAttempts())
+		validateAttemptDependencies(result, name, "escalation", stage.EscalationAttempts())
 	}
 
 	return result

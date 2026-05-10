@@ -1,6 +1,7 @@
 package templates
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,10 @@ func TestList(t *testing.T) {
 		".claude/commands/ff_create_plan.md",
 		".claude/commands/ff_resolve_conflicts.md",
 		".claude/agents/codebase-locator.md",
+		".codex/stages/research.md",
+		".codex/stages/plan.md",
+		".codex/skills/ff_research_codebase/SKILL.md",
+		".codex/skills/ff_create_plan/SKILL.md",
 	}
 
 	fileMap := make(map[string]bool)
@@ -127,6 +132,36 @@ func TestTemplateContainsBudgetConfig(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "_maxBudgetNote") {
 		t.Error("orchestrator.json template missing _maxBudgetNote")
+	}
+}
+
+func TestTemplateRequiresExist(t *testing.T) {
+	dir := t.TempDir()
+	_, err := Write(dir, WriteOptions{Force: true})
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "orchestrator.json"))
+	if err != nil {
+		t.Fatalf("failed to read orchestrator.json: %v", err)
+	}
+
+	var cfg struct {
+		Stages map[string]struct {
+			Requires []string `json:"requires"`
+		} `json:"stages"`
+	}
+	if err := json.Unmarshal(content, &cfg); err != nil {
+		t.Fatalf("failed to parse orchestrator.json: %v", err)
+	}
+
+	for stageName, stage := range cfg.Stages {
+		for _, required := range stage.Requires {
+			if _, err := os.Stat(filepath.Join(dir, required)); err != nil {
+				t.Errorf("stage %s requires missing template %s: %v", stageName, required, err)
+			}
+		}
 	}
 }
 

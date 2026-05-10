@@ -6,7 +6,17 @@
   "defaults": {
     "maxBudgetUsd": 0,
     "_maxBudgetNote": "Set maxBudgetUsd to enable automatic context handoff when budget is exhausted. Pricing basis (as of 2025): Sonnet ~$0.60/context window, Opus ~$3.60/context window. Recommended: 2-5x a single context window cost. Set to 0 to disable.",
-    "_modelFallbackNote": "Use backup_models for transient capacity/rate-limit failures and escalation_models for judge-failed retries. Entries look like {\"harness\":\"claude\",\"model\":\"opus\"}."
+    "_modelFallbackNote": "Use backup for transient capacity/rate-limit failures and escalation for judge-failed retries.",
+    "_modelFallbackExample": {
+      "backup": [
+        { "harness": "claude", "model": "sonnet", "prompt_file": ".claude/stages/implement.md" },
+        { "harness": "codex", "model": "gpt-5.3-codex", "prompt_file": ".codex/stages/implement.md", "requires": [".codex/skills/ff_implement_plan/SKILL.md"] }
+      ],
+      "escalation": [
+        { "harness": "claude", "model": "opus", "prompt_file": ".claude/stages/implement.md" },
+        { "harness": "codex", "model": "gpt-5.3-codex", "prompt_file": ".codex/stages/implement.md", "requires": [".codex/skills/ff_implement_plan/SKILL.md"] }
+      ]
+    }
   },
 
   "workflows": {
@@ -43,8 +53,32 @@
       "stages": ["merge-conflict"]
     },
     "codex-quick": {
-      "description": "Two-stage Codex workflow: implement and commit. Requires .codex/stages/* templates.",
+      "description": "Two-stage Codex workflow using .codex/stages/* and .codex/skills/* templates.",
       "stages": ["implement-codex", "commit-codex"]
+    },
+    "codex-full": {
+      "description": "Complete Codex workflow using .codex/stages/* and .codex/skills/* templates.",
+      "stages": ["research-codex", "plan-codex", "implement-codex", "validate-codex", "commit-codex"]
+    },
+    "codex-debug": {
+      "description": "Codex debug workflow for bug fixes",
+      "stages": ["debug-codex", "implement-codex", "validate-codex", "commit-codex"]
+    },
+    "codex-review": {
+      "description": "Codex workflow to address PR review feedback",
+      "stages": ["fetch-feedback-codex", "implement-codex", "commit-codex"],
+      "skip_goal": true,
+      "ignore_config_change": true
+    },
+    "codex-review-with-replies": {
+      "description": "Codex workflow to address PR review feedback and reply to comments",
+      "stages": ["fetch-feedback-codex", "implement-codex", "reply-to-comments-codex", "commit-codex"],
+      "skip_goal": true,
+      "ignore_config_change": true
+    },
+    "codex-merge-conflict": {
+      "description": "Codex workflow to resolve merge or rebase conflicts",
+      "stages": ["merge-conflict-codex"]
     }
   },
 
@@ -105,15 +139,60 @@
       "requires": [".claude/commands/ff_reply_to_comments.md"],
       "judge_prompt": "Did the reply-to-comments stage complete? Check the CLI output for: 1) PR comments were identified, 2) Replies were posted to addressed comments, 3) A summary of replies was provided."
     },
+    "research-codex": {
+      "harness": "codex",
+      "prompt_file": ".codex/stages/research.md",
+      "requires": [".codex/skills/ff_research_codebase/SKILL.md"],
+      "judge_prompt": "Did the research stage produce useful findings? Check the CLI output for: 1) A research document was written to thoughts/shared/research/, 2) It contains relevant code locations and patterns, 3) It identifies key files related to the goal."
+    },
+    "debug-codex": {
+      "harness": "codex",
+      "prompt_file": ".codex/stages/debug.md",
+      "requires": [".codex/skills/ff_debug/SKILL.md"],
+      "judge_prompt": "Did the debug stage identify the issue? Check the CLI output for: 1) Root cause analysis was performed, 2) A fix or next steps were proposed."
+    },
+    "plan-codex": {
+      "harness": "codex",
+      "prompt_file": ".codex/stages/plan.md",
+      "checkpoint": true,
+      "requires": [".codex/skills/ff_create_plan/SKILL.md"],
+      "judge_prompt": "Is the plan complete and actionable? Check the CLI output for: 1) A plan was written to thoughts/shared/plans/, 2) It has clear phases with specific changes, 3) It includes success criteria, 4) No open questions remain."
+    },
     "implement-codex": {
       "harness": "codex",
       "prompt_file": ".codex/stages/implement.md",
+      "requires": [".codex/skills/ff_implement_plan/SKILL.md"],
       "judge_prompt": "Did implementation make progress? Check the CLI output for code changes and absence of critical errors."
+    },
+    "validate-codex": {
+      "harness": "codex",
+      "prompt_file": ".codex/stages/validate.md",
+      "requires": [".codex/skills/ff_validate_plan/SKILL.md"],
+      "judge_prompt": "Did validation pass? Check the CLI output for: 1) Tests were run, 2) Linting/type checking results, 3) Any failures documented with next steps."
     },
     "commit-codex": {
       "harness": "codex",
       "prompt_file": ".codex/stages/commit.md",
+      "requires": [".codex/skills/ff_commit/SKILL.md", ".codex/skills/ff_describe_pr/SKILL.md"],
       "judge_prompt": "Was the commit created successfully? Look for a git commit hash in the output."
+    },
+    "fetch-feedback-codex": {
+      "harness": "codex",
+      "prompt_file": ".codex/stages/fetch-feedback.md",
+      "requires": [],
+      "judge_prompt": "Did the fetch-feedback stage gather PR feedback? Check for: 1) PR comments were fetched, 2) A goal.md was written with clear action items from the feedback."
+    },
+    "merge-conflict-codex": {
+      "harness": "codex",
+      "prompt_file": ".codex/stages/merge-conflict.md",
+      "requires": [".codex/skills/ff_resolve_conflicts/SKILL.md"],
+      "judge_prompt": "Did the merge conflict resolution complete? Check the CLI output for: 1) Conflicts were detected and listed, 2) Resolutions were applied, 3) The merge/rebase was completed or the branch was clean."
+    },
+    "reply-to-comments-codex": {
+      "harness": "codex",
+      "prompt_file": ".codex/stages/reply-to-comments.md",
+      "requires": [".codex/skills/ff_reply_to_comments/SKILL.md"],
+      "judge_prompt": "Did the reply-to-comments stage complete? Check the CLI output for: 1) PR comments were identified, 2) Replies were posted to addressed comments, 3) A summary of replies was provided."
     }
   }
 }

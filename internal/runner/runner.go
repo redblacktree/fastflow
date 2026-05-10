@@ -559,7 +559,7 @@ func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.S
 	}
 
 	primary := r.primaryAttempt(stage, h)
-	attempts := append([]config.ModelAttempt{primary}, stage.BackupModels...)
+	attempts := append([]config.ModelAttempt{primary}, stage.BackupAttempts()...)
 
 	caps := h.Capabilities()
 
@@ -783,6 +783,8 @@ func stageForAttempt(stage *config.Stage, attempt config.ModelAttempt) *config.S
 	effective.Harness = attempt.Harness
 	effective.Backend = ""
 	effective.Model = attempt.Model
+	effective.Backup = nil
+	effective.Escalation = nil
 	effective.BackupModels = nil
 	effective.EscalationModels = nil
 	return &effective
@@ -1236,7 +1238,7 @@ func (r *Runner) retryAttemptsForStage(stage *config.Stage, previousResult *Invo
 	if err != nil {
 		return nil, 0, false, fmt.Errorf("harness init: %w", err)
 	}
-	attempts := append([]config.ModelAttempt{r.primaryAttempt(stage, h)}, stage.EscalationModels...)
+	attempts := append([]config.ModelAttempt{r.primaryAttempt(stage, h)}, stage.EscalationAttempts()...)
 	currentIndex := 0
 	found := false
 	for i, attempt := range attempts {
@@ -1249,8 +1251,8 @@ func (r *Runner) retryAttemptsForStage(stage *config.Stage, previousResult *Invo
 	}
 	if !found && previousResult.Model != "" {
 		current := attemptFromResult(stage, previousResult, r.Config.HarnessForStage(stage))
-		attempts = append([]config.ModelAttempt{current}, stage.EscalationModels...)
-		if len(stage.EscalationModels) > 0 {
+		attempts = append([]config.ModelAttempt{current}, stage.EscalationAttempts()...)
+		if len(stage.EscalationAttempts()) > 0 {
 			return attempts, 1, true, nil
 		}
 		return attempts, 0, false, nil

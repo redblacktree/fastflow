@@ -22,13 +22,13 @@ aliases for existing configs. New configs should use `harness`,
     "research": {
       "harness": "claude",
       "model": "sonnet",
-      "backup_models": [
-        { "harness": "claude", "model": "opus" }
+      "prompt_file": ".claude/stages/research.md",
+      "backup": [
+        { "harness": "codex", "model": "gpt-5.3-codex", "prompt_file": ".codex/stages/research.md" }
       ],
-      "escalation_models": [
-        { "harness": "claude", "model": "opus" }
-      ],
-      "prompt_file": ".claude/stages/research.md"
+      "escalation": [
+        { "harness": "claude", "model": "opus", "prompt_file": ".claude/stages/research-escalated.md" }
+      ]
     },
     "implement-codex": {
       "harness": "codex",
@@ -46,16 +46,18 @@ aliases for existing configs. New configs should use `harness`,
 | `harnesses.<name>.default_model` | harness-specific | Override the model used when `stage.model` is empty. |
 | `stages.<name>.harness` | global `harness` | Per-stage harness override. |
 | `stages.<name>.model` | harness default model | Primary model for a stage. |
-| `stages.<name>.backup_models` | none | Ordered attempts for transient harness/model failures such as rate limits, capacity, unavailable models, or 5xx errors. |
-| `stages.<name>.escalation_models` | none | Ordered attempts used only after the judge rejects a completed stage. |
+| `stages.<name>.backup` | none | Ordered attempts for transient harness/model failures such as rate limits, capacity, unavailable models, or 5xx errors. |
+| `stages.<name>.escalation` | none | Ordered attempts used only after the judge rejects a completed stage. |
 
-Each `backup_models` or `escalation_models` entry requires a `model` and may
-set `harness`, `prompt_file`, `skill`, or `requires`. If `harness` is omitted,
-the attempt uses the stage's effective harness.
+Each `backup` or `escalation` entry requires a `model` and may set `harness`,
+`prompt_file`, `skill`, or `requires`. If `harness` is omitted, the attempt
+uses the stage's effective harness.
 
 Existing `orchestrator.json` files that omit these fields continue to work
 unchanged. The deprecated `backend` field still defaults to `"claude"` and is
 treated as an alias for `harness`.
+The deprecated `backup_models` and `escalation_models` fields are also still
+accepted as aliases for `backup` and `escalation`.
 
 ## New Config Values
 
@@ -70,20 +72,20 @@ These values are available for new configs:
   `binary` and `default_model`.
 - `stages.<name>.harness`: per-stage harness override. This is the preferred
   spelling for what older configs expressed as `backend`.
-- `stages.<name>.backup_models`: ordered fallback attempts for transient
-  harness/model errors. Use this for rate limits, capacity failures,
-  unavailable models, and similar retryable failures.
-- `stages.<name>.escalation_models`: ordered retry attempts used only when a
-  stage completed but the judge rejected the result.
+- `stages.<name>.backup`: ordered fallback attempts for transient harness/model
+  errors. Use this for rate limits, capacity failures, unavailable models, and
+  similar retryable failures.
+- `stages.<name>.escalation`: ordered retry attempts used only when a stage
+  completed but the judge rejected the result.
 
-`backup_models` and `escalation_models` entries have this shape:
+`backup` and `escalation` entries have this shape:
 
 ```json
 {
-  "harness": "claude",
-  "model": "opus",
-  "prompt_file": ".claude/stages/implement.md",
-  "requires": [".claude/commands/ff_implement_plan.md"]
+  "harness": "codex",
+  "model": "gpt-5.3-codex",
+  "prompt_file": ".codex/stages/implement.md",
+  "requires": [".codex/skills/implement/SKILL.md"]
 }
 ```
 
@@ -94,13 +96,11 @@ harness-specific prompt path when needed. Do not set both `prompt_file` and
 
 > **Important:** Setting `"harness": "codex"` at the top level does **not** make
 > the default workflows (`full`, `plan-first`, `debug`, `quick`, `review`) work
-> with Codex. Those workflows use Claude slash-command skills (e.g.
-> `/ff_create_plan`, `/ff_implement_plan`) that Codex cannot resolve. Codex is
-> only supported via the dedicated `codex-quick` workflow (and its
-> `implement-codex` / `commit-codex` stages) or custom Codex-specific stages
-> you author yourself. Use `"harness"` as a per-stage override, not a global
-> drop-in replacement, unless you have authored Codex-compatible prompts for
-> every stage.
+> with Codex. Those workflows use Claude slash-command prompts under
+> `.claude/stages/`. Use the Codex-specific workflows (`codex-quick`,
+> `codex-full`, `codex-debug`, `codex-review`, `codex-review-with-replies`, or
+> `codex-merge-conflict`), which use `.codex/stages/` prompts and
+> `.codex/skills/`, or define custom Codex-specific stages.
 
 ## Capability Matrix
 
@@ -110,7 +110,7 @@ harness-specific prompt path when needed. Do not set both `prompt_file` and
 | `--max-turns` | yes | no | no |
 | Session resume | yes (`--continue`) | yes (`exec resume --last`) | yes (`--continue`) |
 | Streaming tool activity | yes (`stream-json`) | yes (`--json` events) | no (batch mode collapses output) |
-| Slash-command skills | yes | no (skill body is inlined) | no |
+| Slash-command skills | yes | no; Codex prompt files can invoke native `$skill` skills | no |
 | Auth env var | `ANTHROPIC_API_KEY` (with claude.ai fallback) | `OPENAI_API_KEY` | `GH_TOKEN` / `GITHUB_TOKEN` / `COPILOT_GITHUB_TOKEN` |
 
 \* Copilot CLI capability mapping is documented for future implementation only.
@@ -120,12 +120,13 @@ harness-specific prompt path when needed. Do not set both `prompt_file` and
 - **Budget cap not supported** (`SupportsBudget=false`): a `WARN` is printed at
   stage start; the stage proceeds without a cap. Only relevant if `maxBudgetUsd`
   is configured on a Codex stage.
-- **Slash-command skills not supported** (`SupportsSlashCommands=false`): the
-  harness resolves the skill body from `.<harness>/commands/<skill>.md`
-  (preferred) or `.claude/commands/<skill>.md` (fallback), strips YAML
-  frontmatter, and inlines the body before the skill context. The handoff
-  cycle (create_handoff / resume_handoff) is skipped with a warning; partial
-  output is returned to the judge instead.
+- **Slash-command skills not supported** (`SupportsSlashCommands=false`):
+  `stage.skill` is handled by resolving and inlining
+  `.<harness>/commands/<skill>.md` or `.claude/commands/<skill>.md`. Codex
+  prompt files can also invoke native Codex skills with `$skill` from
+  `.codex/skills/<skill>/SKILL.md`. The handoff cycle
+  (create_handoff / resume_handoff) is skipped with a warning; partial output
+  is returned to the judge instead.
 - **Resume not supported** (`SupportsResume=false`): the budget-handoff cycle
   returns a clear error. Currently only defensive because budget caps only
   trigger for Claude.
@@ -154,12 +155,11 @@ No additional configuration is needed. Omitting `"harness"` from
    codex login
    # or set OPENAI_API_KEY in your environment
    ```
-3. Author Codex-friendly stage prompts under `.codex/stages/` that do not rely
-   on `/slash-commands`. See `internal/templates/files/.codex/stages/` for
-   starter templates.
-4. Set `"harness": "codex"` on the specific stages, or use the built-in
-   `codex-quick` workflow. Do not set it as the global `harness` unless every
-   stage in your workflow has a Codex-compatible prompt file.
+3. Use the included Codex stage prompts under `.codex/stages/` and native
+   Codex skills under `.codex/skills/`, or author your own.
+4. Use a built-in Codex workflow such as `codex-quick` or `codex-full`, or set
+   `"harness": "codex"` on specific stages. Do not set Codex as the global
+   harness for Claude-oriented workflows unless every stage has a Codex prompt.
 
 Codex does not support `--max-turns` or `--max-budget-usd`. fastflow ignores
 those fields on Codex stages with a runtime warning.

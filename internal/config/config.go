@@ -47,10 +47,12 @@ type Stage struct {
 	Skill            string         `json:"skill,omitempty"`
 	Requires         []string       `json:"requires,omitempty"`
 	Model            string         `json:"model,omitempty"`
-	BackupModels     []ModelAttempt `json:"backup_models,omitempty"`
-	EscalationModels []ModelAttempt `json:"escalation_models,omitempty"`
-	Harness          string         `json:"harness,omitempty"` // per-stage override; empty = Config.Harness
-	Backend          string         `json:"backend,omitempty"` // deprecated alias for Harness
+	Backup           []ModelAttempt `json:"backup,omitempty"`
+	Escalation       []ModelAttempt `json:"escalation,omitempty"`
+	BackupModels     []ModelAttempt `json:"backup_models,omitempty"`     // deprecated alias for Backup
+	EscalationModels []ModelAttempt `json:"escalation_models,omitempty"` // deprecated alias for Escalation
+	Harness          string         `json:"harness,omitempty"`           // per-stage override; empty = Config.Harness
+	Backend          string         `json:"backend,omitempty"`           // deprecated alias for Harness
 	Checkpoint       bool           `json:"checkpoint,omitempty"`
 	JudgePrompt      string         `json:"judge_prompt,omitempty"`
 	MaxBudgetUsd     *float64       `json:"maxBudgetUsd,omitempty"`
@@ -76,6 +78,22 @@ func (a ModelAttempt) HarnessName(defaultHarness string) string {
 		return strings.TrimSpace(a.Backend)
 	}
 	return defaultHarness
+}
+
+// BackupAttempts returns the ordered attempts used after transient execution failures.
+func (s *Stage) BackupAttempts() []ModelAttempt {
+	if len(s.Backup) > 0 {
+		return s.Backup
+	}
+	return s.BackupModels
+}
+
+// EscalationAttempts returns the ordered attempts used after judge failure.
+func (s *Stage) EscalationAttempts() []ModelAttempt {
+	if len(s.Escalation) > 0 {
+		return s.Escalation
+	}
+	return s.EscalationModels
 }
 
 // EffectiveBudget returns the maxBudgetUsd for a stage, falling back to the
@@ -188,6 +206,21 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.JudgeBackend == "" {
 		cfg.JudgeBackend = cfg.JudgeHarness
+	}
+	for name, stage := range cfg.Stages {
+		if len(stage.Backup) == 0 && len(stage.BackupModels) > 0 {
+			stage.Backup = stage.BackupModels
+		}
+		if len(stage.BackupModels) == 0 && len(stage.Backup) > 0 {
+			stage.BackupModels = stage.Backup
+		}
+		if len(stage.Escalation) == 0 && len(stage.EscalationModels) > 0 {
+			stage.Escalation = stage.EscalationModels
+		}
+		if len(stage.EscalationModels) == 0 && len(stage.Escalation) > 0 {
+			stage.EscalationModels = stage.Escalation
+		}
+		cfg.Stages[name] = stage
 	}
 
 	return &cfg, nil

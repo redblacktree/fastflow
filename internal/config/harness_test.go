@@ -131,7 +131,31 @@ func TestValidate_AcceptsAnyModelString(t *testing.T) {
 	}
 }
 
-func TestLoad_StageBackupAndEscalationModels(t *testing.T) {
+func TestLoad_StageBackupAndEscalation(t *testing.T) {
+	cfg := writeAndLoad(t, map[string]any{
+		"default_workflow": "full",
+		"workflows":        map[string]any{"full": map[string]any{"stages": []string{"s1"}}},
+		"stages": map[string]any{
+			"s1": map[string]any{
+				"skill":      "test",
+				"backup":     []map[string]any{{"harness": "claude", "model": "sonnet"}},
+				"escalation": []map[string]any{{"harness": "claude", "model": "opus"}},
+			},
+		},
+	})
+	stage, err := cfg.GetStage("s1")
+	if err != nil {
+		t.Fatalf("GetStage: %v", err)
+	}
+	if len(stage.BackupAttempts()) != 1 || stage.BackupAttempts()[0].Model != "sonnet" {
+		t.Fatalf("BackupAttempts = %+v, want sonnet", stage.BackupAttempts())
+	}
+	if len(stage.EscalationAttempts()) != 1 || stage.EscalationAttempts()[0].Model != "opus" {
+		t.Fatalf("EscalationAttempts = %+v, want opus", stage.EscalationAttempts())
+	}
+}
+
+func TestLoad_BackupModelsAliasesRemainSupported(t *testing.T) {
 	cfg := writeAndLoad(t, map[string]any{
 		"default_workflow": "full",
 		"workflows":        map[string]any{"full": map[string]any{"stages": []string{"s1"}}},
@@ -147,27 +171,27 @@ func TestLoad_StageBackupAndEscalationModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStage: %v", err)
 	}
-	if len(stage.BackupModels) != 1 || stage.BackupModels[0].Model != "sonnet" {
-		t.Fatalf("BackupModels = %+v, want sonnet", stage.BackupModels)
+	if len(stage.BackupAttempts()) != 1 || stage.BackupAttempts()[0].Model != "sonnet" {
+		t.Fatalf("BackupAttempts = %+v, want sonnet", stage.BackupAttempts())
 	}
-	if len(stage.EscalationModels) != 1 || stage.EscalationModels[0].Model != "opus" {
-		t.Fatalf("EscalationModels = %+v, want opus", stage.EscalationModels)
+	if len(stage.EscalationAttempts()) != 1 || stage.EscalationAttempts()[0].Model != "opus" {
+		t.Fatalf("EscalationAttempts = %+v, want opus", stage.EscalationAttempts())
 	}
 }
 
-func TestValidate_RejectsEmptyBackupModel(t *testing.T) {
+func TestValidate_RejectsEmptyBackupAttemptModel(t *testing.T) {
 	cfg := &config.Config{
 		Harness:         "claude",
 		JudgeHarness:    "claude",
 		DefaultWorkflow: "full",
 		Workflows:       map[string]config.Workflow{"full": {Stages: []string{"s1"}}},
 		Stages: map[string]config.Stage{
-			"s1": {Skill: "test", BackupModels: []config.ModelAttempt{{Harness: "claude", Model: " "}}},
+			"s1": {Skill: "test", Backup: []config.ModelAttempt{{Harness: "claude", Model: " "}}},
 		},
 	}
 	res := config.Validate(cfg)
 	if res.IsValid() {
-		t.Fatal("expected validation error for empty backup_models entry")
+		t.Fatal("expected validation error for empty backup entry")
 	}
 }
 

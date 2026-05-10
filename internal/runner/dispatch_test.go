@@ -156,7 +156,7 @@ func TestExecuteStage_ModelComesFromStageWhenSet(t *testing.T) {
 	}
 }
 
-func TestExecuteStage_BackupModelsFallbackOnRateLimit(t *testing.T) {
+func TestExecuteStage_BackupFallbackOnRateLimit(t *testing.T) {
 	fakeE := &fakeHarness{
 		name:         "fake-e",
 		defaultModel: "default-model",
@@ -173,7 +173,7 @@ func TestExecuteStage_BackupModelsFallbackOnRateLimit(t *testing.T) {
 			"s4": {
 				Skill: "test",
 				Model: "cheap-model",
-				BackupModels: []config.ModelAttempt{
+				Backup: []config.ModelAttempt{
 					{Harness: "fake-e", Model: "smart-model"},
 				},
 			},
@@ -197,7 +197,7 @@ func TestExecuteStage_BackupModelsFallbackOnRateLimit(t *testing.T) {
 		t.Fatalf("calls = %d, want 2", len(fakeE.calls))
 	}
 	if fakeE.calls[0].Model != "cheap-model" || fakeE.calls[1].Model != "smart-model" {
-		t.Fatalf("backup models = [%s %s], want [cheap-model smart-model]", fakeE.calls[0].Model, fakeE.calls[1].Model)
+		t.Fatalf("backup attempts = [%s %s], want [cheap-model smart-model]", fakeE.calls[0].Model, fakeE.calls[1].Model)
 	}
 	if result.Model != "smart-model" {
 		t.Errorf("result.Model = %q, want smart-model", result.Model)
@@ -229,7 +229,7 @@ func TestRun_UpgradesModelWhenJudgeFailsStage(t *testing.T) {
 			"s5": {
 				Skill: "test",
 				Model: "cheap-model",
-				EscalationModels: []config.ModelAttempt{
+				Escalation: []config.ModelAttempt{
 					{Harness: "fake-stage-upgrade", Model: "smart-model"},
 					{Harness: "fake-stage-upgrade", Model: "smarter-model"},
 				},
@@ -253,7 +253,7 @@ func TestRun_UpgradesModelWhenJudgeFailsStage(t *testing.T) {
 		t.Fatalf("stage calls = %d, want 3", len(stageHarness.calls))
 	}
 	if stageHarness.calls[0].Model != "cheap-model" || stageHarness.calls[1].Model != "smart-model" || stageHarness.calls[2].Model != "smarter-model" {
-		t.Fatalf("escalation models = [%s %s %s], want [cheap-model smart-model smarter-model]", stageHarness.calls[0].Model, stageHarness.calls[1].Model, stageHarness.calls[2].Model)
+		t.Fatalf("escalation attempts = [%s %s %s], want [cheap-model smart-model smarter-model]", stageHarness.calls[0].Model, stageHarness.calls[1].Model, stageHarness.calls[2].Model)
 	}
 	if len(judgeHarness.calls) != 2 {
 		t.Fatalf("judge calls = %d, want 2", len(judgeHarness.calls))
@@ -269,7 +269,7 @@ func TestRetryAttemptsForStage_ReusesSuccessfulBackupWhenNoEscalation(t *testing
 	stage := &config.Stage{
 		Skill: "test",
 		Model: "cheap-model",
-		BackupModels: []config.ModelAttempt{
+		Backup: []config.ModelAttempt{
 			{Harness: "fake-f", Model: "backup-model"},
 		},
 	}
