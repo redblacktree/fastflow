@@ -1177,8 +1177,65 @@ func SetupWorktree(ticket string, opts SetupWorktreeOpts) (string, bool, error) 
 // DefaultPostCreateHooks returns the standard hooks to run after worktree creation.
 func DefaultPostCreateHooks(repoName string) []func(string) error {
 	return []func(string) error{
+		thoughtsExcludeHook(),
 		thoughtsInitHook(repoName),
 	}
+}
+
+// thoughtsExcludeHook keeps Fastflow's runtime thoughts/ directory out of git.
+// It uses the repo-local exclude file so existing project .gitignore files are
+// not modified as a side effect of creating a worktree.
+func thoughtsExcludeHook() func(string) error {
+	return func(wtPath string) error {
+		return EnsureThoughtsExcluded(wtPath)
+	}
+}
+
+// EnsureThoughtsExcluded adds thoughts/ to the local git exclude file.
+func EnsureThoughtsExcluded(workDir string) error {
+	cmd := exec.Command("git", "rev-parse", "--git-path", "info/exclude")
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("locate git exclude file: %w", err)
+	}
+
+	excludePath := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(excludePath) {
+		excludePath = filepath.Join(workDir, excludePath)
+	}
+
+	return ensureLine(excludePath, "thoughts/")
+}
+
+func ensureLine(path, line string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	for _, existing := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(existing) == line {
+			return nil
+		}
+	}
+
+	prefix := ""
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		prefix = "\n"
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	_, err = fmt.Fprintf(f, "%s%s\n", prefix, line)
+	return err
 }
 
 // thoughtsInitHook returns a hook that runs `humanlayer thoughts init` in the worktree.

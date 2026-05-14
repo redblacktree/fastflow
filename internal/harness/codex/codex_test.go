@@ -207,3 +207,37 @@ func TestCodexHarness_BinaryAndModelOverride(t *testing.T) {
 		t.Errorf("DefaultModel() = %q, want gpt-4o", b.DefaultModel())
 	}
 }
+
+func TestCodexHarness_BuildArgsEnablesMultiAgent(t *testing.T) {
+	b := New(harness.Config{})
+	args := b.buildArgs(harness.InvokeOptions{
+		Model:   "gpt-5.3-codex-spark",
+		WorkDir: "/tmp/work",
+	}, "/tmp/last.txt", "do work")
+
+	if !containsAdjacent(args, "--enable", "multi_agent") {
+		t.Fatalf("args = %v, want --enable multi_agent", args)
+	}
+}
+
+func TestCodexHarness_BuildResumeArgsEnablesMultiAgent(t *testing.T) {
+	b := New(harness.Config{})
+	args := b.buildArgs(harness.InvokeOptions{
+		Continue: true,
+		Model:    "gpt-5.3-codex-spark",
+		WorkDir:  "/tmp/work",
+	}, "/tmp/last.txt", "continue work")
+
+	if !containsAdjacent(args, "--enable", "multi_agent") {
+		t.Fatalf("args = %v, want --enable multi_agent", args)
+	}
+}
+
+func containsAdjacent(args []string, first, second string) bool {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == first && args[i+1] == second {
+			return true
+		}
+	}
+	return false
+}
