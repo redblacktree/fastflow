@@ -56,7 +56,7 @@ Use appropriate reply based on the action taken:
 
 - **Fixed**: "✅ **Addressed** - Fixed in commit {sha}. {description of change}"
 - **Implemented**: "✅ **Addressed** - Implemented as suggested. {details}"
-- **Partially addressed**: "🔄 **Partially Addressed** - {what was done}. {what remains/why not fully addressed}"
+- **Partially addressed**: "Partially addressed - {what was done}. {what remains/why not fully addressed}"
 - **Discussed**: "💬 **Discussed** - {explanation of why the suggestion wasn't implemented}"
 - **Clarification needed**: "❓ **Needs Clarification** - {question about the feedback}"
 

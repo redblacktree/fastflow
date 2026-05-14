@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -144,6 +145,33 @@ func TestSetupWorktree_HookFailure(t *testing.T) {
 	}
 }
 
+func TestEnsureThoughtsExcluded(t *testing.T) {
+	baseDir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	opts := SetupWorktreeOpts{
+		NoFetch: true,
+		BaseDir: baseDir,
+		AfterCreate: []func(string) error{
+			thoughtsExcludeHook(),
+		},
+	}
+
+	wtPath, _, err := SetupWorktree("HOOK-004", opts)
+	if err != nil {
+		t.Fatalf("SetupWorktree failed: %v", err)
+	}
+
+	out := runOutput(t, wtPath, "git", "check-ignore", "thoughts/example.md")
+	if strings.TrimSpace(out) != "thoughts/example.md" {
+		t.Fatalf("git check-ignore output = %q, want thoughts/example.md", out)
+	}
+
+	if err := EnsureThoughtsExcluded(wtPath); err != nil {
+		t.Fatalf("EnsureThoughtsExcluded second call failed: %v", err)
+	}
+}
+
 // helpers
 
 func run(t *testing.T, dir string, name string, args ...string) {
@@ -154,6 +182,17 @@ func run(t *testing.T, dir string, name string, args ...string) {
 	if err != nil {
 		t.Fatalf("command %s %v failed: %v\n%s", name, args, err, out)
 	}
+}
+
+func runOutput(t *testing.T, dir string, name string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("command %s %v failed: %v\n%s", name, args, err, out)
+	}
+	return string(out)
 }
 
 func writeFile(t *testing.T, path, content string) {

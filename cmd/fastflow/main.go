@@ -549,6 +549,10 @@ func runRun(cmd *cobra.Command, args []string) error {
 	// Compute run directory (needs workDir from worktree setup)
 	runDir := runner.GetRunDir(workDir, flagTicket)
 
+	if err := runner.EnsureThoughtsExcluded(workDir); err != nil {
+		output.Printf("%s Could not update local git exclude for thoughts/: %v\n", warning("WARNING"), err)
+	}
+
 	// Check for duplicate active run
 	if !flagRunForce {
 		checkResult, err := state.CheckActiveRun(runDir)
@@ -771,6 +775,16 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	}
 	output.Printf("%s All dependencies found\n", success("OK"))
 
+	if tracked, err := trackedThoughtsFiles(); err == nil && len(tracked) > 0 {
+		output.Printf("%s thoughts/ contains %d tracked file(s); Fastflow runtime files should stay out of git\n",
+			warning("WARN"), len(tracked))
+		for _, path := range tracked {
+			output.Printf("  - %s\n", path)
+		}
+	} else if err != nil {
+		output.Printf("%s Could not check tracked thoughts/ files: %v\n", warning("WARN"), err)
+	}
+
 	// Check the configured harness binaries
 	output.Printf("\n%s Checking runtime dependencies...\n", bold(""))
 	seenHarnesses := map[string]bool{
@@ -815,6 +829,19 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func trackedThoughtsFiles() ([]string, error) {
+	cmd := exec.Command("git", "ls-files", "thoughts")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	trimmed := strings.TrimSpace(string(out))
+	if trimmed == "" {
+		return nil, nil
+	}
+	return strings.Split(trimmed, "\n"), nil
+}
+
 func runInit(cmd *cobra.Command, args []string) error {
 	success := color.New(color.FgGreen).SprintFunc()
 	errColor := color.New(color.FgRed).SprintFunc()
@@ -849,6 +876,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("%s Failed to write templates: %w", errColor("ERROR"), err)
 	}
+	if flagDryRun {
+		output.Printf("%s Would ensure .gitignore contains thoughts/\n", warning("NOTE"))
+	} else if changed, err := ensureGitignoreEntry(targetDir, "thoughts/"); err != nil {
+		output.Printf("%s Could not update .gitignore for thoughts/: %v\n", warning("WARNING"), err)
+	} else if changed {
+		output.Printf("%s Ensured .gitignore contains thoughts/\n", success("OK"))
+	}
 
 	// Print results
 	if len(result.Created) > 0 {
@@ -882,6 +916,33 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func ensureGitignoreEntry(targetDir, entry string) (bool, error) {
+	return ensureFileLine(filepath.Join(targetDir, ".gitignore"), entry)
+}
+
+func ensureFileLine(path, line string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	for _, existing := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(existing) == line {
+			return false, nil
+		}
+	}
+	prefix := ""
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		prefix = "\n"
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintf(f, "%s%s\n", prefix, line)
+	return err == nil, err
 }
 
 // findExecutable is a helper to run a command and check if it exists.

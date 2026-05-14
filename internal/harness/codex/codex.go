@@ -85,6 +85,7 @@ func (b *Harness) buildArgs(opts harness.InvokeOptions, lastMsgPath, prompt stri
 		// codex exec resume --last replaces "exec" and feeds a follow-up prompt
 		return []string{
 			"exec", "resume", "--last",
+			"--enable", "multi_agent",
 			"--model", opts.Model,
 			"--cd", opts.WorkDir,
 			"--json",
@@ -95,6 +96,7 @@ func (b *Harness) buildArgs(opts harness.InvokeOptions, lastMsgPath, prompt stri
 	}
 	return []string{
 		"exec",
+		"--enable", "multi_agent",
 		"--model", opts.Model,
 		"--cd", opts.WorkDir,
 		"--json",
