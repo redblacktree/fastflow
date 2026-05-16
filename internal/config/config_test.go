@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/redblacktree/fastflow/internal/harness"
 )
 
 func TestEffectiveBudget_StageOverride(t *testing.T) {
@@ -86,5 +88,47 @@ func TestLoadConfigWithBudget(t *testing.T) {
 	}
 	if *s.MaxBudgetUsd != 7.5 {
 		t.Errorf("stage s1 MaxBudgetUsd = %v, want 7.5", *s.MaxBudgetUsd)
+	}
+}
+
+func TestLoadHarnessConfigWithNestedCodexSettings(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &Config{
+		Workflows:       map[string]Workflow{"full": {Stages: []string{"s1"}}},
+		Stages:          map[string]Stage{"s1": {Skill: "test"}},
+		DefaultWorkflow: "full",
+		Harnesses: map[string]harness.Config{
+			"codex": {
+				Binary:       "codex",
+				DefaultModel: "gpt-5.3-codex-spark",
+				Codex: harness.CodexConfig{
+					ModelContextWindow:         128000,
+					ContextHandoffThresholdPct: 50,
+				},
+			},
+		},
+	}
+
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+
+	path := filepath.Join(dir, "orchestrator.json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	codex := loaded.HarnessConfig("codex").Codex
+	if codex.ModelContextWindow != 128000 {
+		t.Errorf("ModelContextWindow = %v, want 128000", codex.ModelContextWindow)
+	}
+	if codex.ContextHandoffThresholdPct != 50 {
+		t.Errorf("ContextHandoffThresholdPct = %v, want 50", codex.ContextHandoffThresholdPct)
 	}
 }

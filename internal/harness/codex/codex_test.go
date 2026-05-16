@@ -38,7 +38,7 @@ func TestStripFrontmatter_UnclosedFrontmatter(t *testing.T) {
 
 func TestResolveSkill_CodexTakesPriority(t *testing.T) {
 	dir := t.TempDir()
-	codexPath := filepath.Join(dir, ".codex", "commands", "foo.md")
+	codexPath := filepath.Join(dir, ".codex", "skills", "foo", "SKILL.md")
 	os.MkdirAll(filepath.Dir(codexPath), 0755)
 	os.WriteFile(codexPath, []byte("codex skill body"), 0644)
 
@@ -133,7 +133,7 @@ func TestParseCodexStream_CollectsSessionID(t *testing.T) {
 	ndjson := `{"type":"session_started","session_id":"sess-abc123"}` + "\n" +
 		`{"type":"assistant_message","content":"Hello"}` + "\n"
 
-	sessionID, _ := parseCodexStream(strings.NewReader(ndjson), false, false)
+	sessionID, _, _ := parseCodexStream(strings.NewReader(ndjson), false, false)
 	if sessionID != "sess-abc123" {
 		t.Errorf("sessionID = %q, want sess-abc123", sessionID)
 	}
@@ -143,7 +143,7 @@ func TestParseCodexStream_IgnoresUnknownEventTypes(t *testing.T) {
 	ndjson := `{"type":"unknown_future_event","data":{"foo":"bar"}}` + "\n" +
 		`{"type":"session_started","session_id":"sess-xyz"}` + "\n"
 
-	sessionID, raw := parseCodexStream(strings.NewReader(ndjson), false, false)
+	sessionID, raw, _ := parseCodexStream(strings.NewReader(ndjson), false, false)
 	if sessionID != "sess-xyz" {
 		t.Errorf("sessionID = %q, want sess-xyz", sessionID)
 	}
@@ -157,7 +157,7 @@ func TestParseCodexStream_HandlesInvalidJSON(t *testing.T) {
 		`{"type":"session_started","session_id":"ok"}` + "\n"
 
 	// Should not panic; should still collect the valid session_id line
-	sessionID, _ := parseCodexStream(strings.NewReader(ndjson), false, false)
+	sessionID, _, _ := parseCodexStream(strings.NewReader(ndjson), false, false)
 	if sessionID != "ok" {
 		t.Errorf("sessionID = %q, want ok", sessionID)
 	}
@@ -167,9 +167,18 @@ func TestParseCodexStream_VerboseToolActivity(t *testing.T) {
 	ndjson := `{"type":"function_call","name":"write_file","arguments":{"path":"main.go","content":"package main"}}` + "\n"
 
 	// Verbose=true should not panic; we just verify it runs without error
-	_, raw := parseCodexStream(strings.NewReader(ndjson), true, false)
+	_, raw, _ := parseCodexStream(strings.NewReader(ndjson), true, false)
 	if !strings.Contains(raw, "function_call") {
 		t.Error("raw output should contain function_call event")
+	}
+}
+
+func TestParseCodexStream_CapturesTurnUsage(t *testing.T) {
+	ndjson := `{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":30,"reasoning_output_tokens":10}}` + "\n"
+
+	_, _, usage := parseCodexStream(strings.NewReader(ndjson), false, false)
+	if usage.InputTokens != 100 || usage.OutputTokens != 30 {
+		t.Fatalf("usage = %+v, want input=100 output=30", usage)
 	}
 }
 
@@ -230,6 +239,43 @@ func TestCodexHarness_BuildResumeArgsEnablesMultiAgent(t *testing.T) {
 
 	if !containsAdjacent(args, "--enable", "multi_agent") {
 		t.Fatalf("args = %v, want --enable multi_agent", args)
+	}
+}
+
+func TestCodexHarness_BuildArgsAddsConfiguredCompactionLimit(t *testing.T) {
+	b := New(harness.Config{
+		Codex: harness.CodexConfig{
+			ModelAutoCompactTokenLimit: 64000,
+			ToolOutputTokenLimit:       4000,
+		},
+	})
+	args := b.buildArgs(harness.InvokeOptions{
+		Model:   "gpt-5.3-codex-spark",
+		WorkDir: "/tmp/work",
+	}, "/tmp/last.txt", "do work")
+
+	if !containsAdjacent(args, "-c", "model_auto_compact_token_limit=64000") {
+		t.Fatalf("args = %v, want model_auto_compact_token_limit config", args)
+	}
+	if !containsAdjacent(args, "-c", "tool_output_token_limit=4000") {
+		t.Fatalf("args = %v, want tool_output_token_limit config", args)
+	}
+}
+
+func TestCodexHarness_ContextHandoffThreshold(t *testing.T) {
+	b := New(harness.Config{
+		Codex: harness.CodexConfig{
+			ModelContextWindow:         1000,
+			ContextHandoffThresholdPct: 50,
+		},
+	})
+
+	percent := b.contextPercent(codexUsage{InputTokens: 450, OutputTokens: 50})
+	if percent != 50 {
+		t.Fatalf("percent = %v, want 50", percent)
+	}
+	if !b.hitContextHandoffThreshold(percent) {
+		t.Fatal("expected context handoff threshold to be hit")
 	}
 }
 

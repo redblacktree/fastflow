@@ -9,6 +9,16 @@ import (
 type Config struct {
 	Binary       string `json:"binary,omitempty"`        // override binary path; empty = harness default
 	DefaultModel string `json:"default_model,omitempty"` // override DefaultModel(); empty = harness default
+
+	Codex CodexConfig `json:"codex,omitempty"`
+}
+
+// CodexConfig contains Codex CLI-specific configuration passthroughs.
+type CodexConfig struct {
+	ModelContextWindow         int     `json:"model_context_window,omitempty"`
+	ModelAutoCompactTokenLimit int     `json:"model_auto_compact_token_limit,omitempty"`
+	ContextHandoffThresholdPct float64 `json:"context_handoff_threshold_percent,omitempty"`
+	ToolOutputTokenLimit       int     `json:"tool_output_token_limit,omitempty"`
 }
 
 // Constructor builds a Harness from its config block.

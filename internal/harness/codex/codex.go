@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 
 	"github.com/redblacktree/fastflow/internal/harness"
 	"github.com/redblacktree/fastflow/internal/output"
@@ -16,6 +17,7 @@ import (
 type Harness struct {
 	binary       string
 	defaultModel string
+	config       harness.CodexConfig
 }
 
 // New creates a Codex harness from configuration.
@@ -28,7 +30,7 @@ func New(cfg harness.Config) *Harness {
 	if model == "" {
 		model = "o4-mini" // current Codex CLI default; see docs/backends.md
 	}
-	return &Harness{binary: bin, defaultModel: model}
+	return &Harness{binary: bin, defaultModel: model, config: cfg.Codex}
 }
 
 func (b *Harness) Name() string         { return "codex" }
@@ -83,8 +85,11 @@ func (b *Harness) Invoke(opts harness.InvokeOptions) (*harness.InvokeResult, err
 func (b *Harness) buildArgs(opts harness.InvokeOptions, lastMsgPath, prompt string) []string {
 	if opts.Continue {
 		// codex exec resume --last replaces "exec" and feeds a follow-up prompt
-		return []string{
+		args := []string{
 			"exec", "resume", "--last",
+		}
+		args = append(args, b.configArgs()...)
+		return append(args,
 			"--enable", "multi_agent",
 			"--model", opts.Model,
 			"--cd", opts.WorkDir,
@@ -92,10 +97,13 @@ func (b *Harness) buildArgs(opts harness.InvokeOptions, lastMsgPath, prompt stri
 			"--output-last-message", lastMsgPath,
 			"--full-auto",
 			prompt,
-		}
+		)
 	}
-	return []string{
+	args := []string{
 		"exec",
+	}
+	args = append(args, b.configArgs()...)
+	return append(args,
 		"--enable", "multi_agent",
 		"--model", opts.Model,
 		"--cd", opts.WorkDir,
@@ -103,7 +111,22 @@ func (b *Harness) buildArgs(opts harness.InvokeOptions, lastMsgPath, prompt stri
 		"--output-last-message", lastMsgPath,
 		"--full-auto",
 		prompt,
+	)
+}
+
+func (b *Harness) configArgs() []string {
+	var args []string
+	add := func(key string, value int) {
+		if value <= 0 {
+			return
+		}
+		args = append(args, "-c", key+"="+strconv.Itoa(value))
 	}
+
+	add("model_context_window", b.config.ModelContextWindow)
+	add("model_auto_compact_token_limit", b.config.ModelAutoCompactTokenLimit)
+	add("tool_output_token_limit", b.config.ToolOutputTokenLimit)
+	return args
 }
 
 // run executes the codex command, parses NDJSON events, reads the last message file.
@@ -120,16 +143,20 @@ func (b *Harness) run(cmd *exec.Cmd, opts harness.InvokeOptions, lastMsgPath str
 		return nil, fmt.Errorf("start %s: %w", b.binary, err)
 	}
 
-	sessionID, rawEvents := parseCodexStream(stdoutR, opts.Verbose, opts.Debug)
+	sessionID, rawEvents, usage := parseCodexStream(stdoutR, opts.Verbose, opts.Debug)
 
 	cmdErr := cmd.Wait()
 
 	rawOutput := rawEvents + "\n" + stderrBuf.String()
 
 	result := &harness.InvokeResult{
-		RawOutput: rawOutput,
-		SessionID: sessionID,
+		RawOutput:      rawOutput,
+		SessionID:      sessionID,
+		ContextTokens:  usage.InputTokens + usage.OutputTokens,
+		ContextWindow:  b.config.ModelContextWindow,
+		ContextPercent: b.contextPercent(usage),
 	}
+	result.HitContextHandoff = b.hitContextHandoffThreshold(result.ContextPercent)
 
 	if cmdErr != nil {
 		if exitErr, ok := cmdErr.(*exec.ExitError); ok {
@@ -165,4 +192,19 @@ func (b *Harness) run(cmd *exec.Cmd, opts harness.InvokeOptions, lastMsgPath str
 	}
 
 	return result, nil
+}
+
+func (b *Harness) contextPercent(usage codexUsage) float64 {
+	if b.config.ModelContextWindow <= 0 {
+		return 0
+	}
+	tokens := usage.InputTokens + usage.OutputTokens
+	if tokens <= 0 {
+		return 0
+	}
+	return float64(tokens) * 100 / float64(b.config.ModelContextWindow)
+}
+
+func (b *Harness) hitContextHandoffThreshold(percent float64) bool {
+	return b.config.ContextHandoffThresholdPct > 0 && percent >= b.config.ContextHandoffThresholdPct
 }

@@ -95,7 +95,7 @@
           ]
         }
       ],
-      "model": "gpt-5.3-codex-spark"
+      "model": "gpt-5.3-codex"
     },
     "debug": {
       "prompt_file": ".codex/stages/debug.md",
@@ -124,7 +124,7 @@
           ]
         }
       ],
-      "model": "gpt-5.3-codex-spark"
+      "model": "gpt-5.3-codex"
     },
     "plan": {
       "prompt_file": ".codex/stages/plan.md",
@@ -154,7 +154,7 @@
           ]
         }
       ],
-      "model": "gpt-5.3-codex-spark"
+      "model": "gpt-5.3-codex"
     },
     "implement": {
       "prompt_file": ".codex/stages/implement.md",
@@ -183,7 +183,7 @@
           ]
         }
       ],
-      "model": "gpt-5.3-codex-spark"
+      "model": "gpt-5.3-codex"
     },
     "validate": {
       "prompt_file": ".codex/stages/validate.md",
@@ -329,7 +329,7 @@
     }
   },
   "defaults": {
-    "_modelFallbackNote": "Use backup for transient Codex execution failures and escalation for judge-failed retries. Primary and backup use Spark; escalation uses GPT-5.5.",
+    "_modelFallbackNote": "Use gpt-5.3-codex for research/plan/implement/debug to reduce context handoff churn. Use Spark for bounded validate/commit-style stages. Escalation uses GPT-5.5 after judge-failed retries.",
     "_modelFallbackExample": {
       "backup": [
         {
@@ -352,14 +352,19 @@
         }
       ]
     },
-    "_maxBudgetNote": "Codex stages do not support maxBudgetUsd; keep this at 0 unless a future harness supports budget handoff."
+    "_maxBudgetNote": "Codex stages do not support maxBudgetUsd; keep this at 0 unless a future harness supports budget handoff.",
+    "_codexContextNote": "Codex-specific context handoff settings live under harnesses.codex.codex. This config asks fastflow to run ff_create_handoff, then ff_resume_handoff in a fresh session, after a completed Codex turn reports 50%+ approximate context usage."
   },
   "harness": "codex",
   "judge_harness": "codex",
   "harnesses": {
     "codex": {
       "binary": "codex",
-      "default_model": "gpt-5.3-codex-spark"
+      "default_model": "gpt-5.3-codex-spark",
+      "codex": {
+        "model_context_window": 128000,
+        "context_handoff_threshold_percent": 50
+      }
     }
   }
 }

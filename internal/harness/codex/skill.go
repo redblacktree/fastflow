@@ -8,10 +8,11 @@ import (
 )
 
 // resolveSkill returns the body of a skill definition for inlining into a Codex prompt.
-// Looks up .codex/commands/<skill>.md first; falls back to .claude/commands/<skill>.md
-// (stripping frontmatter). Returns an error if neither exists.
+// Looks up native Codex skills/commands first, then falls back to Claude
+// command files (stripping frontmatter). Returns an error if none exists.
 func resolveSkill(workDir, skill string) (string, error) {
 	candidates := []string{
+		filepath.Join(workDir, ".codex", "skills", skill, "SKILL.md"),
 		filepath.Join(workDir, ".codex", "commands", skill+".md"),
 		filepath.Join(workDir, ".claude", "commands", skill+".md"),
 	}
@@ -20,7 +21,7 @@ func resolveSkill(workDir, skill string) (string, error) {
 			return stripFrontmatter(string(data)), nil
 		}
 	}
-	return "", fmt.Errorf("skill %q not found in .codex/commands/ or .claude/commands/", skill)
+	return "", fmt.Errorf("skill %q not found in .codex/skills/, .codex/commands/, or .claude/commands/", skill)
 }
 
 func stripFrontmatter(s string) string {

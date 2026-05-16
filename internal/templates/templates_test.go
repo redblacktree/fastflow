@@ -133,6 +133,9 @@ func TestTemplateContainsBudgetConfig(t *testing.T) {
 	if !strings.Contains(string(content), "_maxBudgetNote") {
 		t.Error("orchestrator.json template missing _maxBudgetNote")
 	}
+	if !strings.Contains(string(content), "context_handoff_threshold_percent") {
+		t.Error("orchestrator.json template missing Codex context compaction config")
+	}
 }
 
 func TestTemplateRequiresExist(t *testing.T) {

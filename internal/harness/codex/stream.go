@@ -19,12 +19,20 @@ type codexEvent struct {
 	Name      string          `json:"name"`      // function_call tool name
 	Arguments json.RawMessage `json:"arguments"` // function_call args
 	Message   string          `json:"message"`   // error message
+	Usage     codexUsage      `json:"usage"`
+}
+
+type codexUsage struct {
+	InputTokens           int `json:"input_tokens"`
+	CachedInputTokens     int `json:"cached_input_tokens"`
+	OutputTokens          int `json:"output_tokens"`
+	ReasoningOutputTokens int `json:"reasoning_output_tokens"`
 }
 
 // parseCodexStream reads NDJSON events from r, printing tool activity when
 // verbose is true. Returns the collected session ID and the raw combined line
 // output for auth classification.
-func parseCodexStream(r io.Reader, verbose, debug bool) (sessionID string, rawOutput string) {
+func parseCodexStream(r io.Reader, verbose, debug bool) (sessionID string, rawOutput string, usage codexUsage) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 
@@ -48,6 +56,9 @@ func parseCodexStream(r io.Reader, verbose, debug bool) (sessionID string, rawOu
 		if ev.SessionID != "" && sessionID == "" {
 			sessionID = ev.SessionID
 		}
+		if ev.Type == "turn.completed" {
+			usage = ev.Usage
+		}
 
 		if verbose && ev.Type == "function_call" && ev.Name != "" {
 			summary := summarizeCodexTool(ev.Name, ev.Arguments)
@@ -56,7 +67,7 @@ func parseCodexStream(r io.Reader, verbose, debug bool) (sessionID string, rawOu
 	}
 
 	rawOutput = strings.Join(lines, "\n")
-	return sessionID, rawOutput
+	return sessionID, rawOutput, usage
 }
 
 // summarizeCodexTool returns a short display summary of a Codex tool call.

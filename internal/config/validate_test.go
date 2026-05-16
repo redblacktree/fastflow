@@ -3,6 +3,8 @@ package config
 import (
 	"testing"
 
+	"github.com/redblacktree/fastflow/internal/harness"
+
 	_ "github.com/redblacktree/fastflow/internal/harness/claude"
 )
 
@@ -57,5 +59,25 @@ func TestValidate_ZeroBudgetIsValid(t *testing.T) {
 	result := Validate(cfg)
 	if !result.IsValid() {
 		t.Errorf("expected zero budget to be valid, got errors: %s", result.Error())
+	}
+}
+
+func TestValidate_InvalidCodexHarnessConfig(t *testing.T) {
+	cfg := &Config{
+		Workflows:       map[string]Workflow{"full": {Stages: []string{"s1"}}},
+		Stages:          map[string]Stage{"s1": {Skill: "test"}},
+		DefaultWorkflow: "full",
+		Harnesses: map[string]harness.Config{
+			"codex": {
+				Codex: harness.CodexConfig{
+					ModelContextWindow:         -1,
+					ContextHandoffThresholdPct: 101,
+				},
+			},
+		},
+	}
+	result := Validate(cfg)
+	if result.IsValid() {
+		t.Error("expected validation error for invalid Codex harness config")
 	}
 }

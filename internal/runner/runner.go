@@ -649,6 +649,40 @@ func (r *Runner) executeStage(ctx *RunContext, stageName string, stage *config.S
 		os.Remove(handoffPath) //nolint:errcheck
 	}
 
+	// Handle Codex context threshold with automatic handoff/resume. Codex only
+	// reports usage at turn completion, so this is an approximate post-turn
+	// trigger rather than a mid-turn interrupt.
+	contextResumptions := 0
+	for result.HitContextHandoff && contextResumptions < r.MaxResumptions {
+		contextResumptions++
+		warning := color.New(color.FgYellow).SprintFunc()
+		output.Printf("    %s Context usage %.1f%% (%d/%d tokens), attempting handoff/resume (%d/%d)...\n",
+			warning("CONTEXT"), result.ContextPercent, result.ContextTokens, result.ContextWindow, contextResumptions, r.MaxResumptions)
+
+		handoffResult, handoffErr := r.runContextHandoffCycle(ctx, stageName, stage, model, activeHarness)
+		if handoffErr != nil {
+			if r.Debug {
+				output.Printf("[DEBUG] Context handoff/resume failed: %v\n", handoffErr)
+			}
+			break
+		}
+
+		result.Output += "\n\n--- [RESUMED AFTER CONTEXT HANDOFF] ---\n\n" + handoffResult.Output
+		result.HitContextHandoff = handoffResult.HitContextHandoff
+		result.HitBudgetCap = handoffResult.HitBudgetCap
+		result.HitMaxTurns = handoffResult.HitMaxTurns
+		result.ExitCode = handoffResult.ExitCode
+		result.ContextTokens = handoffResult.ContextTokens
+		result.ContextWindow = handoffResult.ContextWindow
+		result.ContextPercent = handoffResult.ContextPercent
+	}
+
+	if result.HitContextHandoff && contextResumptions >= r.MaxResumptions {
+		warning := color.New(color.FgYellow).SprintFunc()
+		output.Printf("    %s Max context resumptions (%d) reached, proceeding with partial result\n",
+			warning("WARN"), r.MaxResumptions)
+	}
+
 	return result, nil
 }
 
@@ -839,16 +873,9 @@ func shouldTryNextModel(err error) bool {
 	return false
 }
 
-// runHandoffCycle runs create_handoff followed by resume_handoff.
-// If the harness doesn't support slash-commands, it skips the cycle with a warning.
+// runHandoffCycle runs ff_create_handoff followed by ff_resume_handoff.
+// Harnesses translate skills to their native invocation form.
 func (r *Runner) runHandoffCycle(ctx *RunContext, stageName string, model string, b hs.Harness) (*InvokeResult, error) {
-	if !b.Capabilities().SupportsSlashCommands {
-		warning := color.New(color.FgYellow).SprintFunc()
-		output.Printf("    %s Harness %q does not support slash-command handoff; returning partial result\n",
-			warning("WARN"), b.Name())
-		return &InvokeResult{}, nil
-	}
-
 	handoffContext := fmt.Sprintf("Stage: %s\nTicket: %s\nGoal: %s\nRun directory: %s",
 		stageName, ctx.Ticket, ctx.Goal, ctx.RunDir)
 
@@ -857,7 +884,7 @@ func (r *Runner) runHandoffCycle(ctx *RunContext, stageName string, model string
 	}
 
 	_, createErr := b.Invoke(hs.InvokeOptions{
-		Skill:        "create_handoff",
+		Skill:        "ff_create_handoff",
 		SkillContext: handoffContext,
 		Model:        model,
 		WorkDir:      ctx.WorkDir,
@@ -872,7 +899,7 @@ func (r *Runner) runHandoffCycle(ctx *RunContext, stageName string, model string
 	}
 
 	resumeResult, resumeErr := b.Invoke(hs.InvokeOptions{
-		Skill:        "resume_handoff",
+		Skill:        "ff_resume_handoff",
 		SkillContext: handoffContext,
 		Model:        model,
 		WorkDir:      ctx.WorkDir,
@@ -883,6 +910,87 @@ func (r *Runner) runHandoffCycle(ctx *RunContext, stageName string, model string
 	}
 
 	return resumeResult, nil
+}
+
+// runContextHandoffCycle asks the active Codex session to create an
+// ff_create_handoff handoff before starting a fresh session from that handoff.
+func (r *Runner) runContextHandoffCycle(ctx *RunContext, stageName string, stage *config.Stage, model string, b hs.Harness) (*InvokeResult, error) {
+	if !b.Capabilities().SupportsResume {
+		return nil, fmt.Errorf("harness %q does not support session resume for context handoff", b.Name())
+	}
+
+	handoffPointerPath := filepath.Join(ctx.WorkDir, ".fastflow", "latest-handoff-path.txt")
+	if err := os.MkdirAll(filepath.Dir(handoffPointerPath), 0755); err != nil {
+		return nil, fmt.Errorf("failed to create .fastflow directory: %w", err)
+	}
+	os.Remove(handoffPointerPath) //nolint:errcheck
+
+	handoffContext := fmt.Sprintf(`Stage: %s
+Ticket: %s
+Goal: %s
+Run directory: %s
+
+The current session has crossed the configured context handoff threshold. Use the ff_create_handoff skill to create a handoff now, while the full session context is still available. After the handoff is created, write the exact handoff file path and nothing else to this file:
+
+%s`, stageName, ctx.Ticket, ctx.Goal, ctx.RunDir, handoffPointerPath)
+
+	createResult, createErr := b.Invoke(hs.InvokeOptions{
+		Continue:     true,
+		Skill:        "ff_create_handoff",
+		SkillContext: handoffContext,
+		Model:        model,
+		WorkDir:      ctx.WorkDir,
+		Debug:        r.Debug,
+	})
+	if createErr != nil {
+		return nil, fmt.Errorf("ff_create_handoff failed: %w", createErr)
+	}
+
+	handoffPath, err := readHandoffPath(handoffPointerPath, createResult.Output)
+	if err != nil {
+		return nil, err
+	}
+
+	originalPrompt, err := r.buildStagePrompt(ctx, stageName, stage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build stage prompt: %w", err)
+	}
+
+	resumePrompt := fmt.Sprintf(`%s
+
+Original stage prompt:
+%s`, handoffPath, originalPrompt)
+
+	resumeOpts := hs.InvokeOptions{
+		Model:   model,
+		WorkDir: ctx.WorkDir,
+		Verbose: r.Verbose,
+		Debug:   r.Debug,
+	}
+	resumeOpts.Skill = "ff_resume_handoff"
+	resumeOpts.SkillContext = resumePrompt
+
+	resumeResult, err := b.Invoke(resumeOpts)
+	if err != nil {
+		return nil, fmt.Errorf("context handoff resume failed: %w", err)
+	}
+
+	return resumeResult, nil
+}
+
+func readHandoffPath(pointerPath, fallback string) (string, error) {
+	if data, err := os.ReadFile(pointerPath); err == nil {
+		if path := strings.TrimSpace(string(data)); path != "" {
+			return path, nil
+		}
+	}
+	for _, field := range strings.Fields(fallback) {
+		clean := strings.Trim(field, "`'\"()[]{}.,")
+		if strings.Contains(clean, "thoughts/shared/handoffs/") && strings.HasSuffix(clean, ".md") {
+			return clean, nil
+		}
+	}
+	return "", fmt.Errorf("ff_create_handoff did not report a handoff path")
 }
 
 // runBudgetHandoffCycle handles context handoff when budget is exhausted.
