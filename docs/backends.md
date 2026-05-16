@@ -16,7 +16,14 @@ aliases for existing configs. New configs should use `harness`,
   "judge_harness": "claude",
   "harnesses": {
     "claude": { "binary": "claude", "default_model": "sonnet" },
-    "codex":  { "binary": "codex",  "default_model": "o4-mini" }
+    "codex":  {
+      "binary": "codex",
+      "default_model": "gpt-5.3-codex-spark",
+      "codex": {
+        "model_context_window": 128000,
+        "context_handoff_threshold_percent": 50
+      }
+    }
   },
   "stages": {
     "research": {
@@ -44,6 +51,10 @@ aliases for existing configs. New configs should use `harness`,
 | `judge_harness` | same as `harness` | Harness used for judge evaluations. |
 | `harnesses.<name>.binary` | same as harness name | Override the binary path/name. |
 | `harnesses.<name>.default_model` | harness-specific | Override the model used when `stage.model` is empty. |
+| `harnesses.codex.codex.model_context_window` | unset | Context window used for FastFlow's Codex handoff percentage math. |
+| `harnesses.codex.codex.context_handoff_threshold_percent` | unset | After a completed Codex turn reports usage at or above this percentage, FastFlow resumes the session to run `ff_create_handoff`, then starts a fresh session through `ff_resume_handoff`. |
+| `harnesses.codex.codex.model_auto_compact_token_limit` | Codex default | Optional direct passthrough to Codex CLI's auto-compaction token threshold; use only as a higher last-resort backstop if desired. |
+| `harnesses.codex.codex.tool_output_token_limit` | Codex default | Optional direct passthrough to Codex CLI's tool output token limit. |
 | `stages.<name>.harness` | global `harness` | Per-stage harness override. |
 | `stages.<name>.model` | harness default model | Primary model for a stage. |
 | `stages.<name>.backup` | none | Ordered attempts for transient harness/model failures such as rate limits, capacity, unavailable models, or 5xx errors. |
@@ -69,7 +80,8 @@ These values are available for new configs:
 - `judge_harness`: harness used by the judge. It defaults to `harness` when
   omitted.
 - `harnesses`: per-harness settings keyed by harness name. Each entry can set
-  `binary` and `default_model`.
+  common fields such as `binary` and `default_model`. Harness-specific behavior
+  is nested under that harness's own key, such as `harnesses.codex.codex`.
 - `stages.<name>.harness`: per-stage harness override. This is the preferred
   spelling for what older configs expressed as `backend`.
 - `stages.<name>.backup`: ordered fallback attempts for transient harness/model
@@ -163,6 +175,32 @@ No additional configuration is needed. Omitting `"harness"` from
 
 Codex does not support `--max-turns` or `--max-budget-usd`. fastflow ignores
 those fields on Codex stages with a runtime warning.
+
+Codex reports token usage at `turn.completed` in its JSON stream. To keep Codex
+sessions around 40-60% context usage without relying on Codex auto-compaction,
+set `harnesses.codex.codex`:
+
+```json
+{
+  "harnesses": {
+    "codex": {
+      "binary": "codex",
+      "default_model": "gpt-5.3-codex-spark",
+      "codex": {
+        "model_context_window": 128000,
+        "context_handoff_threshold_percent": 50
+      }
+    }
+  }
+}
+```
+
+At runtime fastflow uses Codex's reported `input_tokens + output_tokens` as an
+approximation. When that total is 50% or more of `model_context_window`, it
+resumes the current Codex session to run `ff_create_handoff`, then starts a
+fresh session through `ff_resume_handoff`. This avoids Codex auto-compaction in
+the normal path; `model_auto_compact_token_limit` remains available only as an
+optional Codex backstop.
 
 ### GitHub Copilot CLI Status
 

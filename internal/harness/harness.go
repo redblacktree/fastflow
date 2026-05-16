@@ -34,8 +34,14 @@ type InvokeResult struct {
 	Model        string // model that produced this result, set by the runner when applicable
 	HitMaxTurns  bool
 	HitBudgetCap bool
-	SessionID    string
-	TotalCostUsd float64 // 0 if harness doesn't report cost
+	// HitContextHandoff is set when a harness reports approximate context usage
+	// above its configured handoff threshold.
+	HitContextHandoff bool
+	SessionID         string
+	TotalCostUsd      float64 // 0 if harness doesn't report cost
+	ContextTokens     int     // approximate tokens currently consuming context
+	ContextWindow     int     // configured context window used for percentage math
+	ContextPercent    float64
 }
 
 // Capabilities advertises what a harness can and cannot do, so the runner

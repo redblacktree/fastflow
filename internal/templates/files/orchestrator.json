@@ -5,7 +5,7 @@
   "defaults": {
     "maxBudgetUsd": 0,
     "_maxBudgetNote": "Codex stages do not support maxBudgetUsd; keep this at 0 unless a future harness supports budget handoff.",
-    "_modelFallbackNote": "Use backup for transient Codex execution failures and escalation for judge-failed retries. Primary and backup use Spark; escalation uses GPT-5.5.",
+    "_modelFallbackNote": "Use gpt-5.3-codex for research/plan/implement/debug to reduce context handoff churn. Use Spark for bounded validate/commit-style stages. Escalation uses GPT-5.5 after judge-failed retries.",
     "_modelFallbackExample": {
       "backup": [
         {
@@ -27,7 +27,8 @@
           ]
         }
       ]
-    }
+    },
+    "_codexContextNote": "Codex-specific context handoff settings live under harnesses.codex.codex. The default template asks fastflow to run ff_create_handoff, then ff_resume_handoff in a fresh session, after a completed Codex turn reports 50%+ approximate context usage."
   },
   "workflows": {
     "full": {
@@ -174,7 +175,7 @@
           ]
         }
       ],
-      "model": "gpt-5.3-codex-spark"
+      "model": "gpt-5.3-codex"
     },
     "debug": {
       "prompt_file": ".codex/stages/debug.md",
@@ -203,7 +204,7 @@
           ]
         }
       ],
-      "model": "gpt-5.3-codex-spark"
+      "model": "gpt-5.3-codex"
     },
     "plan": {
       "prompt_file": ".codex/stages/plan.md",
@@ -233,7 +234,7 @@
           ]
         }
       ],
-      "model": "gpt-5.3-codex-spark"
+      "model": "gpt-5.3-codex"
     },
     "implement": {
       "prompt_file": ".codex/stages/implement.md",
@@ -262,7 +263,7 @@
           ]
         }
       ],
-      "model": "gpt-5.3-codex-spark"
+      "model": "gpt-5.3-codex"
     },
     "validate": {
       "prompt_file": ".codex/stages/validate.md",
@@ -413,7 +414,7 @@
         ".codex/skills/ff_research_codebase/SKILL.md"
       ],
       "judge_prompt": "Return YES only if the research output identifies the relevant code paths, summarizes the current behavior, notes constraints or risks, and writes or updates the expected research artifact under thoughts/shared/research/. Return NO for vague summaries, missing file references, missing artifact evidence, or unanswered questions that block planning.",
-      "model": "gpt-5.3-codex-spark",
+      "model": "gpt-5.3-codex",
       "backup": [
         {
           "harness": "codex",
@@ -442,7 +443,7 @@
         ".codex/skills/ff_debug/SKILL.md"
       ],
       "judge_prompt": "Return YES only if the debug output names a credible root cause, cites supporting evidence from code/logs/tests, and proposes a concrete fix or next action. Return NO for speculation without evidence, missing reproduction details, or unresolved blockers without a clear handoff.",
-      "model": "gpt-5.3-codex-spark",
+      "model": "gpt-5.3-codex",
       "backup": [
         {
           "harness": "codex",
@@ -472,7 +473,7 @@
         ".codex/skills/ff_create_plan/SKILL.md"
       ],
       "judge_prompt": "Return YES only if the plan artifact under thoughts/shared/plans/ is complete, actionable, sequenced, and includes acceptance criteria, validation steps, risk notes, and any required branch/PR strategy. Return NO if the plan is vague, omits success criteria, ignores known constraints, or leaves open questions that should have been resolved.",
-      "model": "gpt-5.3-codex-spark",
+      "model": "gpt-5.3-codex",
       "backup": [
         {
           "harness": "codex",
@@ -501,7 +502,7 @@
         ".codex/skills/ff_implement_plan/SKILL.md"
       ],
       "judge_prompt": "Return YES only if the output shows concrete code or config changes aligned with the plan/goal, explains meaningful decisions, and reports any validation attempted. Return NO if no relevant files changed, the work is only described but not done, errors are ignored, TODOs are left as substitutes for implementation, or validation failures are unresolved.",
-      "model": "gpt-5.3-codex-spark",
+      "model": "gpt-5.3-codex",
       "backup": [
         {
           "harness": "codex",
@@ -671,7 +672,11 @@
   "harnesses": {
     "codex": {
       "binary": "codex",
-      "default_model": "gpt-5.3-codex-spark"
+      "default_model": "gpt-5.3-codex-spark",
+      "codex": {
+        "model_context_window": 128000,
+        "context_handoff_threshold_percent": 50
+      }
     }
   }
 }

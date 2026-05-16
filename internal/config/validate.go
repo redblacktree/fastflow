@@ -83,6 +83,8 @@ func Validate(cfg *Config) *ValidationResult {
 		})
 	}
 
+	validateHarnessConfigs(result, cfg)
+
 	// Warn when a stage's effective harness is non-Claude but the stage still
 	// references Claude slash-command paths (.claude/). Those stages will fail at
 	// runtime because Codex (and other non-Claude harnesses) cannot execute
@@ -162,6 +164,44 @@ func Validate(cfg *Config) *ValidationResult {
 	}
 
 	return result
+}
+
+func validateHarnessConfigs(result *ValidationResult, cfg *Config) {
+	seen := map[string]harness.Config{}
+	for name, hcfg := range cfg.Backends {
+		seen[name] = hcfg
+	}
+	for name, hcfg := range cfg.Harnesses {
+		seen[name] = hcfg
+	}
+
+	for name, hcfg := range seen {
+		prefix := fmt.Sprintf("harnesses.%s.codex", name)
+		if hcfg.Codex.ModelContextWindow < 0 {
+			result.Errors = append(result.Errors, ValidationError{
+				Field:   prefix + ".model_context_window",
+				Message: "model_context_window must be non-negative",
+			})
+		}
+		if hcfg.Codex.ModelAutoCompactTokenLimit < 0 {
+			result.Errors = append(result.Errors, ValidationError{
+				Field:   prefix + ".model_auto_compact_token_limit",
+				Message: "model_auto_compact_token_limit must be non-negative",
+			})
+		}
+		if hcfg.Codex.ToolOutputTokenLimit < 0 {
+			result.Errors = append(result.Errors, ValidationError{
+				Field:   prefix + ".tool_output_token_limit",
+				Message: "tool_output_token_limit must be non-negative",
+			})
+		}
+		if hcfg.Codex.ContextHandoffThresholdPct < 0 || hcfg.Codex.ContextHandoffThresholdPct > 100 {
+			result.Errors = append(result.Errors, ValidationError{
+				Field:   prefix + ".context_handoff_threshold_percent",
+				Message: "context_handoff_threshold_percent must be between 0 and 100",
+			})
+		}
+	}
 }
 
 func validateAttempts(result *ValidationResult, cfg *Config, stageName, field string, attempts []ModelAttempt) {
