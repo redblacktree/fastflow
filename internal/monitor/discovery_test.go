@@ -67,6 +67,7 @@ func TestDiscoverRuns_SingleRun(t *testing.T) {
 	st.Status = state.StatusRunning
 	st.Stage = "plan"
 	writeState(t, runDir, st)
+	writePID(t, runDir, os.Getpid())
 
 	entries, err := DiscoverRuns(root, "")
 	if err != nil {
@@ -81,6 +82,9 @@ func TestDiscoverRuns_SingleRun(t *testing.T) {
 	}
 	if e.Status != state.StatusRunning {
 		t.Errorf("status: got %q, want %q", e.Status, state.StatusRunning)
+	}
+	if e.Pid != os.Getpid() {
+		t.Errorf("pid: got %d, want %d", e.Pid, os.Getpid())
 	}
 	if e.Stage != "plan" {
 		t.Errorf("stage: got %q, want %q", e.Stage, "plan")
@@ -107,6 +111,9 @@ func TestDiscoverRuns_MultipleRuns(t *testing.T) {
 		st := state.NewState("default", []string{"implement"}, tc.ticket, root)
 		st.Status = tc.status
 		writeState(t, runDir, st)
+		if tc.status == state.StatusRunning {
+			writePID(t, runDir, os.Getpid())
+		}
 	}
 
 	entries, err := DiscoverRuns(root, "")
@@ -153,11 +160,30 @@ func TestDiscoverRuns_StaleDetection(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
 	}
-	if entries[0].Status != "stale" {
-		t.Errorf("status: got %q, want %q", entries[0].Status, "stale")
+	if entries[0].Status != state.StatusStale {
+		t.Errorf("status: got %q, want %q", entries[0].Status, state.StatusStale)
 	}
 	if entries[0].Pid != 0 {
 		t.Errorf("pid should be 0 for stale run, got %d", entries[0].Pid)
+	}
+}
+
+func TestDiscoverRuns_RunningWithoutPidIsStale(t *testing.T) {
+	root := t.TempDir()
+	runDir := makeRunDir(t, root, "ENG-NOPID")
+	st := state.NewState("default", []string{"implement"}, "ENG-NOPID", root)
+	st.Status = state.StatusRunning
+	writeState(t, runDir, st)
+
+	entries, err := DiscoverRuns(root, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].Status != state.StatusStale {
+		t.Errorf("status: got %q, want %q", entries[0].Status, state.StatusStale)
 	}
 }
 

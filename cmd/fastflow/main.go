@@ -3,6 +3,9 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +15,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/redblacktree/fastflow/internal/config"
@@ -159,6 +163,28 @@ Examples:
 	RunE: runList,
 }
 
+var repairStaleRunsCmd = &cobra.Command{
+	Use:   "repair-stale-runs",
+	Short: "Mark abandoned running runs as stale",
+	Long: `Scan fastflow run state for entries that still say "running" even though
+their recorded process is gone, then mark those runs as stale.
+
+This is intended for operational repair and for OpenClaw ingestion. With
+--jsonl-facts, each stale run is emitted as an external fact compatible with
+agent-orchestrator ingest facts.
+
+Examples:
+  # Repair stale runs in the current repo/worktrees
+  fastflow repair-stale-runs
+
+  # Preview only REL-* repairs
+  fastflow repair-stale-runs --prefix REL- --dry-run
+
+  # Emit facts for OpenClaw ingestion
+  fastflow repair-stale-runs --jsonl-facts`,
+	RunE: runRepairStaleRuns,
+}
+
 var monitorCmd = &cobra.Command{
 	Use:   "monitor",
 	Short: "Start a web dashboard for monitoring fastflow runs",
@@ -223,6 +249,9 @@ var (
 	flagBlockedWorkspacePrefix  []string
 	flagAllowUntrustedWorkspace bool
 	flagMonitorAddr             string
+	flagRepairStalePrefix       string
+	flagRepairStaleDryRun       bool
+	flagRepairStaleJSONLFacts   bool
 )
 
 func init() {
@@ -283,11 +312,17 @@ func init() {
 	// Monitor command flags
 	monitorCmd.Flags().StringVar(&flagMonitorAddr, "addr", ":8080", "Address to listen on")
 
+	// Stale run repair flags
+	repairStaleRunsCmd.Flags().StringVar(&flagRepairStalePrefix, "prefix", "", "Filter tickets by prefix (e.g., FAS-, ENG-, REL-)")
+	repairStaleRunsCmd.Flags().BoolVar(&flagRepairStaleDryRun, "dry-run", false, "Preview repairs without changing state.json or pid files")
+	repairStaleRunsCmd.Flags().BoolVar(&flagRepairStaleJSONLFacts, "jsonl-facts", false, "Emit agent-orchestrator external facts as JSONL")
+
 	// Add commands
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(validateCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(listCmd)
+	rootCmd.AddCommand(repairStaleRunsCmd)
 	rootCmd.AddCommand(cleanCmd)
 	rootCmd.AddCommand(monitorCmd)
 }
@@ -1046,6 +1081,129 @@ func runList(cmd *cobra.Command, args []string) error {
 
 	output.Printf("\n%d run(s) found\n", len(entries))
 	return nil
+}
+
+type staleRunExternalFact struct {
+	ID             string         `json:"id"`
+	Source         string         `json:"source"`
+	ExternalID     string         `json:"external_id"`
+	WorkItemID     string         `json:"work_item_id,omitempty"`
+	FactType       string         `json:"fact_type"`
+	ObservedAt     time.Time      `json:"observed_at"`
+	ReceivedAt     time.Time      `json:"received_at"`
+	Payload        map[string]any `json:"payload,omitempty"`
+	IdempotencyKey string         `json:"idempotency_key,omitempty"`
+}
+
+func runRepairStaleRuns(cmd *cobra.Command, args []string) error {
+	warning := color.New(color.FgYellow).SprintFunc()
+	success := color.New(color.FgGreen).SprintFunc()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get working directory: %w", err)
+	}
+
+	repairs, err := monitor.RepairStaleRuns(cwd, flagRepairStalePrefix, flagRepairStaleDryRun)
+	if err != nil {
+		return fmt.Errorf("failed to repair stale runs: %w", err)
+	}
+
+	if flagRepairStaleJSONLFacts {
+		for _, repair := range repairs {
+			line, err := json.Marshal(staleRunFact(repair))
+			if err != nil {
+				return fmt.Errorf("failed to marshal stale run fact: %w", err)
+			}
+			output.Printf("%s\n", line)
+		}
+		return nil
+	}
+
+	if len(repairs) == 0 {
+		if flagRepairStalePrefix != "" {
+			output.Printf("No stale runs found matching prefix: %s\n", flagRepairStalePrefix)
+		} else {
+			output.Printf("No stale runs found.\n")
+		}
+		return nil
+	}
+
+	verb := success("Marked")
+	if flagRepairStaleDryRun {
+		verb = warning("Would mark")
+	}
+	for _, repair := range repairs {
+		pid := ""
+		if repair.Pid > 0 {
+			pid = fmt.Sprintf(" pid=%d", repair.Pid)
+		}
+		output.Printf("%s %s as stale: stage=%s%s reason=%s\n",
+			verb, repair.Ticket, stringOrFallback(repair.Stage, "(none)"), pid, repair.Reason)
+		output.Printf("  Run: %s\n", repair.RunDir)
+	}
+	output.Printf("\n%d stale run(s) %s\n", len(repairs), staleRepairSummaryVerb(flagRepairStaleDryRun))
+	return nil
+}
+
+func staleRepairSummaryVerb(dryRun bool) string {
+	if dryRun {
+		return "would be repaired"
+	}
+	return "repaired"
+}
+
+func staleRunFact(repair monitor.StaleRunRepair) staleRunExternalFact {
+	observedAt, err := time.Parse(time.RFC3339, repair.RepairedAt)
+	if err != nil {
+		observedAt = time.Now().UTC()
+	}
+	idempotencyKey := staleRunFactKey(repair)
+	hash := sha256.Sum256([]byte(idempotencyKey))
+	return staleRunExternalFact{
+		ID:             "fact-fastflow-" + hex.EncodeToString(hash[:])[:16],
+		Source:         "fastflow",
+		ExternalID:     fmt.Sprintf("%s:%s", repair.Ticket, repair.RunDir),
+		WorkItemID:     repair.Ticket,
+		FactType:       "fastflow_run_failed",
+		ObservedAt:     observedAt,
+		ReceivedAt:     time.Now().UTC(),
+		IdempotencyKey: idempotencyKey,
+		Payload: map[string]any{
+			"ticket":           repair.Ticket,
+			"workflow":         repair.Workflow,
+			"stage":            repair.Stage,
+			"work_dir":         repair.WorkDir,
+			"run_dir":          repair.RunDir,
+			"status_before":    repair.StatusBefore,
+			"status_after":     repair.StatusAfter,
+			"state_updated_at": repair.StateUpdatedAt,
+			"pid":              repair.Pid,
+			"pid_source":       repair.PIDSource,
+			"reason":           repair.Reason,
+			"dry_run":          repair.DryRun,
+			"changed":          repair.Changed,
+		},
+	}
+}
+
+func staleRunFactKey(repair monitor.StaleRunRepair) string {
+	return strings.Join([]string{
+		"fastflow",
+		repair.Ticket,
+		repair.RunDir,
+		repair.StatusBefore,
+		repair.StatusAfter,
+		fmt.Sprintf("%d", repair.Pid),
+		repair.StateUpdatedAt,
+	}, ":")
+}
+
+func stringOrFallback(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func runClean(cmd *cobra.Command, args []string) error {

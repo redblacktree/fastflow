@@ -19,6 +19,7 @@ const (
 	StatusCheckpoint = "checkpoint"
 	StatusComplete   = "complete"
 	StatusFailed     = "failed"
+	StatusStale      = "stale"
 )
 
 // PipelineState tracks the progress of a pipeline run.
@@ -31,7 +32,7 @@ type PipelineState struct {
 	ConfigHash string `json:"config_hash"`
 	// Ticket is the ticket identifier for this run.
 	Ticket string `json:"ticket,omitempty"`
-	// Status is the current run status: running, checkpoint, complete, failed.
+	// Status is the current run status: running, checkpoint, complete, failed, stale.
 	Status string `json:"status,omitempty"`
 	// Stage is the name of the currently executing stage.
 	Stage string `json:"stage,omitempty"`
