@@ -72,15 +72,12 @@ func DiscoverRuns(cwd, prefix string) ([]RunEntry, error) {
 					if st.WorkDir != "" {
 						workDir = st.WorkDir
 					}
-					// Detect stale runs: status is running but process is dead
 					if status == state.StatusRunning {
-						pid, _ := state.ReadPID(runDir)
-						if pid > 0 {
-							if !state.IsProcessAlive(pid) {
-								status = "stale"
-							} else {
-								entryPid = pid
-							}
+						liveness := state.AssessRunLiveness(runDir, st)
+						if liveness.Stale {
+							status = state.StatusStale
+						} else if liveness.Running {
+							entryPid = liveness.Pid
 						}
 					}
 				}
@@ -119,16 +116,13 @@ func DiscoverRuns(cwd, prefix string) ([]RunEntry, error) {
 		if status == "" {
 			status = "unknown"
 		}
-		// Detect stale runs: status is running but process is dead
 		var entryPid int
 		if status == state.StatusRunning {
-			pid, _ := state.ReadPID(run.RunDir)
-			if pid > 0 {
-				if !state.IsProcessAlive(pid) {
-					status = "stale"
-				} else {
-					entryPid = pid
-				}
+			liveness := state.AssessRunLiveness(run.RunDir, run.State)
+			if liveness.Stale {
+				status = state.StatusStale
+			} else if liveness.Running {
+				entryPid = liveness.Pid
 			}
 		}
 		stage := run.State.Stage
