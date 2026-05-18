@@ -56,6 +56,38 @@ func TestSetStatus(t *testing.T) {
 	}
 }
 
+func TestStartRunClearsPreviousFailure(t *testing.T) {
+	dir := t.TempDir()
+	s := NewState("full", []string{"research"}, "TEST-START", "/tmp/work")
+	if err := s.SetFinalStatus(dir, StatusFailed, 1, "received signal: terminated"); err != nil {
+		t.Fatalf("SetFinalStatus failed: %v", err)
+	}
+
+	if err := s.StartRun(dir, 12345, "notify-command"); err != nil {
+		t.Fatalf("StartRun failed: %v", err)
+	}
+
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if loaded.Status != StatusRunning {
+		t.Errorf("Status = %q, want %q", loaded.Status, StatusRunning)
+	}
+	if loaded.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0", loaded.ExitCode)
+	}
+	if loaded.Error != "" {
+		t.Errorf("Error = %q, want empty", loaded.Error)
+	}
+	if loaded.Pid != 12345 {
+		t.Errorf("Pid = %d, want 12345", loaded.Pid)
+	}
+	if loaded.OnComplete != "notify-command" {
+		t.Errorf("OnComplete = %q, want notify-command", loaded.OnComplete)
+	}
+}
+
 func TestSetStage(t *testing.T) {
 	dir := t.TempDir()
 	s := NewState("full", []string{"research", "plan"}, "TEST-003", "/tmp/work")

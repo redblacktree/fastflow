@@ -107,6 +107,22 @@ func (s *PipelineState) SetStatus(runDir, status string) error {
 	return s.Save(runDir)
 }
 
+// StartRun marks an existing or new state as actively running under pid.
+func (s *PipelineState) StartRun(runDir string, pid int, onComplete string) error {
+	s.Status = StatusRunning
+	s.ExitCode = 0
+	s.Error = ""
+	s.Pid = pid
+	if onComplete != "" {
+		s.OnComplete = onComplete
+	}
+	s.UpdatedAt = time.Now().Format(time.RFC3339)
+	if s.StartedAt == "" {
+		s.StartedAt = s.UpdatedAt
+	}
+	return s.Save(runDir)
+}
+
 // SetStage updates the current stage name and saves.
 func (s *PipelineState) SetStage(runDir, stageName string) error {
 	s.Stage = stageName
