@@ -201,6 +201,16 @@ func validateHarnessConfigs(result *ValidationResult, cfg *Config) {
 				Message: "context_handoff_threshold_percent must be between 0 and 100",
 			})
 		}
+		if sandbox := strings.TrimSpace(hcfg.Codex.Sandbox); sandbox != "" {
+			switch sandbox {
+			case "read-only", "workspace-write", "danger-full-access":
+			default:
+				result.Errors = append(result.Errors, ValidationError{
+					Field:   prefix + ".sandbox",
+					Message: "sandbox must be one of read-only, workspace-write, or danger-full-access",
+				})
+			}
+		}
 	}
 }
 

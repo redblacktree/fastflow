@@ -675,7 +675,8 @@
       "default_model": "gpt-5.3-codex-spark",
       "codex": {
         "model_context_window": 128000,
-        "context_handoff_threshold_percent": 50
+        "context_handoff_threshold_percent": 50,
+        "dangerously_bypass_approvals_and_sandbox": true
       }
     }
   }

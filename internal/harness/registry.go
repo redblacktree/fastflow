@@ -19,6 +19,8 @@ type CodexConfig struct {
 	ModelAutoCompactTokenLimit int     `json:"model_auto_compact_token_limit,omitempty"`
 	ContextHandoffThresholdPct float64 `json:"context_handoff_threshold_percent,omitempty"`
 	ToolOutputTokenLimit       int     `json:"tool_output_token_limit,omitempty"`
+	Sandbox                    string  `json:"sandbox,omitempty"`
+	BypassApprovalsAndSandbox  bool    `json:"dangerously_bypass_approvals_and_sandbox,omitempty"`
 }
 
 // Constructor builds a Harness from its config block.

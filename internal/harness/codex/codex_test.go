@@ -263,6 +263,44 @@ func TestCodexHarness_BuildArgsAddsConfiguredCompactionLimit(t *testing.T) {
 	}
 }
 
+func TestCodexHarness_BuildArgsAddsBypassSandboxFlag(t *testing.T) {
+	b := New(harness.Config{
+		Codex: harness.CodexConfig{
+			BypassApprovalsAndSandbox: true,
+		},
+	})
+	args := b.buildArgs(harness.InvokeOptions{
+		Model:   "gpt-5.3-codex-spark",
+		WorkDir: "/tmp/work",
+	}, "/tmp/last.txt", "do work")
+
+	if !contains(args, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Fatalf("args = %v, want bypass flag", args)
+	}
+	if contains(args, "--full-auto") {
+		t.Fatalf("args = %v, did not expect --full-auto when bypassing sandbox", args)
+	}
+}
+
+func TestCodexHarness_BuildArgsAddsSandboxFlag(t *testing.T) {
+	b := New(harness.Config{
+		Codex: harness.CodexConfig{
+			Sandbox: "danger-full-access",
+		},
+	})
+	args := b.buildArgs(harness.InvokeOptions{
+		Model:   "gpt-5.3-codex-spark",
+		WorkDir: "/tmp/work",
+	}, "/tmp/last.txt", "do work")
+
+	if !containsAdjacent(args, "--sandbox", "danger-full-access") {
+		t.Fatalf("args = %v, want sandbox flag", args)
+	}
+	if !contains(args, "--full-auto") {
+		t.Fatalf("args = %v, want --full-auto with explicit sandbox", args)
+	}
+}
+
 func TestCodexHarness_ContextHandoffThreshold(t *testing.T) {
 	b := New(harness.Config{
 		Codex: harness.CodexConfig{
@@ -336,6 +374,15 @@ func TestCodexHarnessHelperProcess(t *testing.T) {
 func containsAdjacent(args []string, first, second string) bool {
 	for i := 0; i < len(args)-1; i++ {
 		if args[i] == first && args[i+1] == second {
+			return true
+		}
+	}
+	return false
+}
+
+func contains(args []string, value string) bool {
+	for _, arg := range args {
+		if arg == value {
 			return true
 		}
 	}
