@@ -132,12 +132,9 @@ func (r *Runner) Run(ctx *RunContext) error {
 		pipelineState = state.NewState(ctx.Workflow, workflow.Stages, ctx.Ticket, ctx.WorkDir)
 	}
 
-	// Store PID in state and save
-	pipelineState.Pid = os.Getpid()
-	if ctx.OnComplete != "" {
-		pipelineState.OnComplete = ctx.OnComplete
-	}
-	if err := pipelineState.Save(ctx.RunDir); err != nil {
+	// Store PID in state and save. Resume may reuse a previously failed state,
+	// so clear terminal fields before the new process begins work.
+	if err := pipelineState.StartRun(ctx.RunDir, os.Getpid(), ctx.OnComplete); err != nil {
 		return fmt.Errorf("failed to save initial state: %w", err)
 	}
 
