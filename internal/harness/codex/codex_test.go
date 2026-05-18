@@ -128,6 +128,18 @@ func TestClassifyAuthError_NoError(t *testing.T) {
 	}
 }
 
+func TestClassifyAuthError_IgnoresTimestampFragments(t *testing.T) {
+	cases := []string{
+		"2026-05-18T14:04:08.401211Z WARN codex_core_plugins::manifest: ignoring interface.defaultPrompt",
+		"2026-05-18T14:04:29.429211Z WARN codex_core_plugins::manifest: ignoring interface.defaultPrompt",
+	}
+	for _, c := range cases {
+		if err := classifyAuthError(c); err != nil {
+			t.Errorf("classifyAuthError(%q) = %v, want nil", c, err)
+		}
+	}
+}
+
 // ---------- parseCodexStream ----------
 
 func TestParseCodexStream_CollectsSessionID(t *testing.T) {
