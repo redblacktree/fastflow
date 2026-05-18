@@ -15,12 +15,25 @@ func classifyAuthError(raw string) error {
 		strings.Contains(lower, "run `codex login`"),
 		strings.Contains(lower, "openai_api_key is not set"):
 		return harness.ErrNotLoggedIn
-	case strings.Contains(lower, "401"),
-		strings.Contains(lower, "invalid api key"),
+	case strings.Contains(lower, "invalid api key"),
 		strings.Contains(lower, "incorrect api key"):
 		return harness.ErrInvalidAPIKey
+	case strings.Contains(lower, "401 unauthorized"),
+		strings.Contains(lower, "unauthorized (401)"),
+		strings.Contains(lower, "http 401"),
+		strings.Contains(lower, "status 401"),
+		strings.Contains(lower, "status: 401"),
+		strings.Contains(lower, "status code 401"),
+		strings.Contains(lower, "status_code: 401"):
+		return harness.ErrInvalidAPIKey
 	case strings.Contains(lower, "rate limit"),
-		strings.Contains(lower, "429"):
+		strings.Contains(lower, "429 too many requests"),
+		strings.Contains(lower, "too many requests (429)"),
+		strings.Contains(lower, "http 429"),
+		strings.Contains(lower, "status 429"),
+		strings.Contains(lower, "status: 429"),
+		strings.Contains(lower, "status code 429"),
+		strings.Contains(lower, "status_code: 429"):
 		return harness.ErrRateLimited
 	}
 	return nil
