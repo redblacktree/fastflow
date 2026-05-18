@@ -2,6 +2,7 @@ package codex
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -276,6 +277,59 @@ func TestCodexHarness_ContextHandoffThreshold(t *testing.T) {
 	}
 	if !b.hitContextHandoffThreshold(percent) {
 		t.Fatal("expected context handoff threshold to be hit")
+	}
+}
+
+func TestCodexHarness_RunDoesNotClassifySuccessfulAssistantTextAsRateLimit(t *testing.T) {
+	lastMsgPath := filepath.Join(t.TempDir(), "last-message.txt")
+	cmd := exec.Command(os.Args[0], "-test.run=TestCodexHarnessHelperProcess", "--")
+	cmd.Env = append(os.Environ(),
+		"GO_WANT_CODEX_HELPER=1",
+		"CODEX_HELPER_MODE=success-rate-limit-text",
+		"CODEX_LAST_MESSAGE="+lastMsgPath,
+	)
+
+	result, err := New(harness.Config{}).run(cmd, harness.InvokeOptions{}, lastMsgPath)
+	if err != nil {
+		t.Fatalf("run returned error for successful assistant text: %v", err)
+	}
+	if !strings.Contains(result.Output, "prior harness: rate limit reached") {
+		t.Fatalf("output = %q, want assistant text", result.Output)
+	}
+}
+
+func TestCodexHarness_RunClassifiesStderrRateLimit(t *testing.T) {
+	lastMsgPath := filepath.Join(t.TempDir(), "last-message.txt")
+	cmd := exec.Command(os.Args[0], "-test.run=TestCodexHarnessHelperProcess", "--")
+	cmd.Env = append(os.Environ(),
+		"GO_WANT_CODEX_HELPER=1",
+		"CODEX_HELPER_MODE=stderr-rate-limit",
+		"CODEX_LAST_MESSAGE="+lastMsgPath,
+	)
+
+	_, err := New(harness.Config{}).run(cmd, harness.InvokeOptions{}, lastMsgPath)
+	if err != harness.ErrRateLimited {
+		t.Fatalf("run error = %v, want ErrRateLimited", err)
+	}
+}
+
+func TestCodexHarnessHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_CODEX_HELPER") != "1" {
+		return
+	}
+	switch os.Getenv("CODEX_HELPER_MODE") {
+	case "success-rate-limit-text":
+		if err := os.WriteFile(os.Getenv("CODEX_LAST_MESSAGE"), []byte("prior harness: rate limit reached; current run succeeded"), 0644); err != nil {
+			panic(err)
+		}
+		os.Stdout.WriteString(`{"type":"session_started","session_id":"sess-test"}` + "\n")
+		os.Stdout.WriteString(`{"type":"assistant_message","content":"prior harness: rate limit reached; current run succeeded"}` + "\n")
+		os.Exit(0)
+	case "stderr-rate-limit":
+		os.Stderr.WriteString("rate limit exceeded\n")
+		os.Exit(0)
+	default:
+		os.Exit(2)
 	}
 }
 

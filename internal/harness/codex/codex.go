@@ -178,9 +178,17 @@ func (b *Harness) run(cmd *exec.Cmd, opts harness.InvokeOptions, lastMsgPath str
 		output.Printf("[DEBUG] %s output length: %d chars\n", b.binary, len(result.Output))
 	}
 
-	// Classify auth errors
-	if authErr := classifyAuthError(rawOutput); authErr != nil {
+	// Classify auth errors from Codex CLI failure channels, not successful
+	// assistant/tool output. Review context often mentions prior "rate limit"
+	// blockers, and that should not poison a successful current run.
+	stderrOutput := stderrBuf.String()
+	if authErr := classifyAuthError(stderrOutput); authErr != nil {
 		return nil, authErr
+	}
+	if result.ExitCode != 0 && result.Output == "" {
+		if authErr := classifyAuthError(rawEvents); authErr != nil {
+			return nil, authErr
+		}
 	}
 
 	if result.ExitCode != 0 && result.Output == "" {
