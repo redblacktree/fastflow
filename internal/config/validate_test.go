@@ -72,6 +72,7 @@ func TestValidate_InvalidCodexHarnessConfig(t *testing.T) {
 				Codex: harness.CodexConfig{
 					ModelContextWindow:         -1,
 					ContextHandoffThresholdPct: 101,
+					Sandbox:                    "moon-base",
 				},
 			},
 		},

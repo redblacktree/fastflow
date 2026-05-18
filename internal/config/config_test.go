@@ -104,6 +104,7 @@ func TestLoadHarnessConfigWithNestedCodexSettings(t *testing.T) {
 				Codex: harness.CodexConfig{
 					ModelContextWindow:         128000,
 					ContextHandoffThresholdPct: 50,
+					BypassApprovalsAndSandbox:  true,
 				},
 			},
 		},
@@ -127,6 +128,9 @@ func TestLoadHarnessConfigWithNestedCodexSettings(t *testing.T) {
 	codex := loaded.HarnessConfig("codex").Codex
 	if codex.ModelContextWindow != 128000 {
 		t.Errorf("ModelContextWindow = %v, want 128000", codex.ModelContextWindow)
+	}
+	if !codex.BypassApprovalsAndSandbox {
+		t.Error("BypassApprovalsAndSandbox = false, want true")
 	}
 	if codex.ContextHandoffThresholdPct != 50 {
 		t.Errorf("ContextHandoffThresholdPct = %v, want 50", codex.ContextHandoffThresholdPct)

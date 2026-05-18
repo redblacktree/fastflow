@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/redblacktree/fastflow/internal/harness"
 	"github.com/redblacktree/fastflow/internal/output"
@@ -89,29 +90,29 @@ func (b *Harness) buildArgs(opts harness.InvokeOptions, lastMsgPath, prompt stri
 			"exec", "resume", "--last",
 		}
 		args = append(args, b.configArgs()...)
-		return append(args,
+		args = append(args,
 			"--enable", "multi_agent",
 			"--model", opts.Model,
 			"--cd", opts.WorkDir,
 			"--json",
 			"--output-last-message", lastMsgPath,
-			"--full-auto",
-			prompt,
 		)
+		args = append(args, b.executionModeArgs()...)
+		return append(args, prompt)
 	}
 	args := []string{
 		"exec",
 	}
 	args = append(args, b.configArgs()...)
-	return append(args,
+	args = append(args,
 		"--enable", "multi_agent",
 		"--model", opts.Model,
 		"--cd", opts.WorkDir,
 		"--json",
 		"--output-last-message", lastMsgPath,
-		"--full-auto",
-		prompt,
 	)
+	args = append(args, b.executionModeArgs()...)
+	return append(args, prompt)
 }
 
 func (b *Harness) configArgs() []string {
@@ -126,6 +127,17 @@ func (b *Harness) configArgs() []string {
 	add("model_context_window", b.config.ModelContextWindow)
 	add("model_auto_compact_token_limit", b.config.ModelAutoCompactTokenLimit)
 	add("tool_output_token_limit", b.config.ToolOutputTokenLimit)
+	return args
+}
+
+func (b *Harness) executionModeArgs() []string {
+	if b.config.BypassApprovalsAndSandbox {
+		return []string{"--dangerously-bypass-approvals-and-sandbox"}
+	}
+	args := []string{"--full-auto"}
+	if sandbox := strings.TrimSpace(b.config.Sandbox); sandbox != "" {
+		args = append(args, "--sandbox", sandbox)
+	}
 	return args
 }
 

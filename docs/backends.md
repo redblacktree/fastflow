@@ -21,7 +21,8 @@ aliases for existing configs. New configs should use `harness`,
       "default_model": "gpt-5.3-codex-spark",
       "codex": {
         "model_context_window": 128000,
-        "context_handoff_threshold_percent": 50
+        "context_handoff_threshold_percent": 50,
+        "dangerously_bypass_approvals_and_sandbox": true
       }
     }
   },
@@ -55,6 +56,8 @@ aliases for existing configs. New configs should use `harness`,
 | `harnesses.codex.codex.context_handoff_threshold_percent` | unset | After a completed Codex turn reports usage at or above this percentage, FastFlow resumes the session to run `ff_create_handoff`, then starts a fresh session through `ff_resume_handoff`. |
 | `harnesses.codex.codex.model_auto_compact_token_limit` | Codex default | Optional direct passthrough to Codex CLI's auto-compaction token threshold; use only as a higher last-resort backstop if desired. |
 | `harnesses.codex.codex.tool_output_token_limit` | Codex default | Optional direct passthrough to Codex CLI's tool output token limit. |
+| `harnesses.codex.codex.sandbox` | Codex default | Optional Codex CLI sandbox mode passthrough. Valid values are `read-only`, `workspace-write`, and `danger-full-access`. |
+| `harnesses.codex.codex.dangerously_bypass_approvals_and_sandbox` | `false` | When true, FastFlow passes `--dangerously-bypass-approvals-and-sandbox` to Codex CLI instead of `--full-auto`, giving the nested Codex run local/no-sandbox behavior. Use only in trusted worktrees. |
 | `stages.<name>.harness` | global `harness` | Per-stage harness override. |
 | `stages.<name>.model` | harness default model | Primary model for a stage. |
 | `stages.<name>.backup` | none | Ordered attempts for transient harness/model failures such as rate limits, capacity, unavailable models, or 5xx errors. |
